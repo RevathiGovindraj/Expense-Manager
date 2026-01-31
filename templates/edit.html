@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Edit Expense</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+
+<div class="login-card">
+  <h2>Edit Expense</h2>
+
+  <form method="POST">
+    <input type="text" name="name" value="{{ item[0] }}" required>
+    <input type="text" name="category" value="{{ item[1] }}" required>
+    <input type="number" name="amount" value="{{ item[2] }}" required>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - Expense Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <div class="login-page">
+    <div class="login-card">
+
+      <div class="login-logo">
+        <div class="splash-logo small-logo">
+          <div class="logo-wallet"></div>
+          <div class="logo-line"></div>
+          <div class="logo-coin coin-a"></div>
+          <div class="logo-coin coin-b"></div>
+        </div>
+      </div>
+
+      <h2 class="login-title">Welcome Back 👋</h2>
+      <p class="login-subtitle">Login to continue</p>
+
+      {% if error %}
+        <div class="login-error">{{ error }}</div>
+      {% endif %}
+
+      <form method="POST" action="/login" class="login-form">
+        <input type="text" name="username" placeholder="Username" required>
+        <input type="password" name="password" placeholder="Password" required>
+
+        <button type="submit">Login</button>
+      </form>
+
+    </div>
+  </div>
+
+</body>
+</html>

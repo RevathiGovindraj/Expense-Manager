@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+<div class="app-bg">
+  <div class="app-screen">
+
+    <!-- HEADER -->
+    <div class="app-header">
+      <div class="app-title">
+        <div class="mini-logo">₹</div>
+        <div>
+          <h1>Expense Tracker</h1>
+          <p>Dashboard</p>
+        </div>
+      </div>
+      <a href="/logout" class="logout-btn">Logout</a>
+    </div>
+
+    <!-- TOP CARDS -->
+    <div class="cards">
+      <div class="card">
+        <h3>Total Expense</h3>
+        <p>₹{{ total }}</p>
+      </div>
+      <div class="card">
+        <h3>Total Entries</h3>
+        <p>{{ expenses | length }}</p>
+      </div>
+      <div class="card">
+        <h3>Status</h3>
+        <p>Active</p>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabbar">
+      <button class="tab active" onclick="openTab(event,'tab-dashboard')">📊 Dashboard</button>
+      <button class="tab" onclick="openTab(event,'tab-add')">➕ Add Expense</button>
+      <button class="tab" onclick="openTab(event,'tab-assistant')">🤖 Assistant</button>
+      <button class="tab" onclick="openTab(event,'tab-history')">📋 History</button>
+    </div>
+
+    <!-- DASHBOARD TAB -->
+    <div id="tab-dashboard" class="tab-section active">
+      <div class="chart-container">
+        <h2>Expense Overview</h2>
+        <div style="height:300px;">
+          <canvas id="expenseChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADD EXPENSE TAB -->
+    <div id="tab-add" class="tab-section">
+      <div class="form-card">
+        <h2>Add Expense</h2>
+
+        <form method="POST" action="/add" class="expense-form">
+          <label>Name</label>
+          <input type="text" name="name" required>
+
+          <label>Category</label>
+          <select name="category" required>
+            <option value="">Select Category</option>
+            <option>Food</option>
+            <option>Travel</option>
+            <option>Shopping</option>
+            <option>Bills</option>
+            <option>Other</option>
+          </select>
+
+          <label>Amount</label>
+          <input type="number" name="amount" required>
+
+          <button type="submit">Add Expense</button>
+        </form>
+
+        <button class="voice-btn">🎤 Voice Entry</button>
+      </div>
+    </div>
+
+    <!-- ASSISTANT TAB (FIXED) -->
+    <div id="tab-assistant" class="tab-section">
+      <div class="dashboard-grid">
+
+        <div class="form-card">
+          <h2>🤖 Chatbot Expense Entry</h2>
+          <p style="color:#6b7280;font-size:14px;">
+            Type like: <b>Add 200 pizza</b>
+          </p>
+
+          <form method="POST" action="/chat_add" class="chat-form chat-row">
+  <input type="text" id="voiceInput" name="message" placeholder="Say: Add 200 pizza" required>
+  <button type="button" onclick="startVoice()">🎤</button>
+  <button type="submit">Send</button>
+</form>
+
+
+          {% if chat_reply %}
+            <p style="margin-top:10px;font-weight:700;color:#16a34a;">
+              {{ chat_reply }}
+            </p>
+          {% endif %}
+        </div>
+
+        <div class="form-card">
+          <h2>📌 Tips</h2>
+          <ul style="text-align:left;line-height:1.8;">
+            <li>Auto category detection</li>
+            <li>No form needed</li>
+            <li>Fast entry</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="tab-history" class="tab-section">
+      <div class="table-header">
+        <h2 class="list-title">📋 Expense History</h2>
+        <input type="text"
+               id="searchInput"
+               class="search-input"
+               placeholder="Search by name or category..."
+               onkeyup="filterTable()">
+      </div>
+<a href="/export" class="delete-btn" style="background:#1cc88a;">
+  ⬇ Export CSV
+</a>
+
+      <table class="expense-table" id="expenseTable">
+        <tr>
+          <th>Name</th>
+          <th>Category</th>
+          <th>Amount</th>
+          <th>Action</th>
+        </tr>
+
+        {% for e in expenses %}
+        <tr>
+          <td>{{ e[0] }}</td>
+          <td>{{ e[1] }}</td>
+          <td>{{ e[2] }}</td>
+          <td>
+  <a class="delete-btn" style="background:#3b82f6" href="/edit/{{ loop.index0 }}">Edit</a>
+  <a class="delete-btn" href="/delete/{{ loop.index0 }}">Delete</a>
+</td>
+
+        </tr>
+        {% endfor %}
+      </table>
+
+      <h3 class="total-text">Total Expense: ₹{{ total }}</h3>
+    </div>
+
+  </div>
+</div>
+
+<!-- TAB + SEARCH -->
+<script>
+function openTab(evt, tabId) {
+  document.querySelectorAll('.tab-section').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  evt.currentTarget.classList.add('active');
+}
+
+function filterTable() {
+  let q = document.getElementById("searchInput").value.toLowerCase();
+  document.querySelectorAll("#expenseTable tr").forEach((row, i) => {
+    if (i === 0) return;
+    row.style.display = row.innerText.toLowerCase().includes(q) ? "" : "none";
+  });
+}
+</script>
+
+<!-- CHART DATA -->
+<script type="application/json" id="chart-data">
+  {{ category_totals | tojson }}
+</script>
+
+<script>
+const ctx = document.getElementById('expenseChart').getContext('2d');
+const categoryTotals = JSON.parse(
+  document.getElementById('chart-data').textContent
+);
+
+new Chart(ctx, {
+  type: 'bar',
+  data: {
+    labels: Object.keys(categoryTotals),
+    datasets: [{
+      label: 'Expenses',
+      data: Object.values(categoryTotals),
+      backgroundColor: [
+        '#4e73df',
+        '#1cc88a',
+        '#36b9cc',
+        '#f6c23e',
+        '#e74a3b'
+      ]
+    }]
+  },
+  options: { responsive: true, maintainAspectRatio: false }
+});
+</script>
+<script>
+function startVoice() {
+  if (!('webkitSpeechRecognition' in window)) {
+    alert("Voice not supported");
+    return;
+  }
+
+  const recognition = new webkitSpeechRecognition();
+  recognition.lang = "en-IN";
+  recognition.start();
+
+  recognition.onresult = function(event) {
+    document.getElementById("voiceInput").value =
+      event.results[0][0].transcript;
+  };
+}
+</script>
+
+</body>
+</html>
