@@ -44,12 +44,13 @@
 
     <!-- DASHBOARD TAB -->
     <div id="tab-dashboard" class="tab-section active">
-      <div class="chart-container">
-        <h2>Expense Overview</h2>
-        <div style="height:300px;">
-          <canvas id="expenseChart"></canvas>
-        </div>
+
+      <!-- CHART -->
+      <div class="chart-container" style="height:350px; max-width:600px; margin:auto;">
+        <h2 style="text-align:center;">Expense Overview</h2>
+        <canvas id="expenseChart"></canvas>
       </div>
+
     </div>
 
     <!-- ADD EXPENSE TAB -->
@@ -81,49 +82,11 @@
       </div>
     </div>
 
-    <!-- ASSISTANT TAB -->
-    <div id="tab-assistant" class="tab-section">
-      <div class="dashboard-grid">
-
-        <div class="form-card">
-          <h2>🤖 Chatbot Expense Entry</h2>
-
-          <form method="POST" action="/chat_add" class="chat-form chat-row">
-            <input type="text" id="voiceInput" name="message" placeholder="Say: Add 200 pizza" required>
-            <button type="button" onclick="startVoice()">🎤</button>
-            <button type="submit">Send</button>
-          </form>
-
-          {% if chat_reply %}
-            <p style="margin-top:10px;font-weight:700;color:#16a34a;">
-              {{ chat_reply }}
-            </p>
-          {% endif %}
-        </div>
-
-        <div class="form-card">
-          <h2>📌 Tips</h2>
-          <ul style="text-align:left;line-height:1.8;">
-            <li>Auto category detection</li>
-            <li>No form needed</li>
-            <li>Fast entry</li>
-          </ul>
-        </div>
-
-      </div>
-    </div>
-
     <!-- HISTORY TAB -->
     <div id="tab-history" class="tab-section">
-      <div class="table-header">
-        <h2 class="list-title">📋 Expense History</h2>
-        <input type="text" id="searchInput" class="search-input"
-               placeholder="Search..." onkeyup="filterTable()">
-      </div>
+      <h2>Expense History</h2>
 
-      <a href="/export" class="delete-btn" style="background:#1cc88a;">⬇ Export CSV</a>
-
-      <table class="expense-table" id="expenseTable">
+      <table class="expense-table">
         <tr>
           <th>Name</th>
           <th>Category</th>
@@ -137,7 +100,6 @@
           <td>{{ e[1] }}</td>
           <td>{{ e[2] }}</td>
           <td>
-            <a class="delete-btn" style="background:#3b82f6" href="/edit/{{ loop.index0 }}">Edit</a>
             <a class="delete-btn" href="/delete/{{ loop.index0 }}">Delete</a>
           </td>
         </tr>
@@ -145,54 +107,24 @@
       </table>
     </div>
 
-    <!-- 🔽 BOTTOM TAB BAR (UPDATED ICON VERSION) -->
-   <div class="tabbar">
-  <button class="tab active" onclick="openTab(event,'tab-dashboard')">
-    Dashboard
-  </button>
+    <!-- TAB BAR -->
+    <div class="tabbar">
+      <button class="tab active" onclick="openTab(event,'tab-dashboard')">Dashboard</button>
+      <button class="tab" onclick="openTab(event,'tab-add')">Add</button>
+      <button class="tab" onclick="openTab(event,'tab-history')">History</button>
+    </div>
 
-  <button class="tab" onclick="openTab(event,'tab-add')">
-    Add
-  </button>
-
-  <button class="tab" onclick="openTab(event,'tab-assistant')">
-    Assistant
-  </button>
-
-  <button class="tab" onclick="openTab(event,'tab-history')">
-    History
-  </button>
+  </div>
 </div>
 
-
 <!-- SCRIPTS -->
+
 <script>
 function openTab(evt, tabId) {
   document.querySelectorAll('.tab-section').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
   document.getElementById(tabId).classList.add('active');
   evt.currentTarget.classList.add('active');
-}
-
-function filterTable() {
-  let q = document.getElementById("searchInput").value.toLowerCase();
-  document.querySelectorAll("#expenseTable tr").forEach((row, i) => {
-    if (i === 0) return;
-    row.style.display = row.innerText.toLowerCase().includes(q) ? "" : "none";
-  });
-}
-
-function startVoice() {
-  if (!('webkitSpeechRecognition' in window)) {
-    alert("Voice not supported");
-    return;
-  }
-  const recognition = new webkitSpeechRecognition();
-  recognition.lang = "en-IN";
-  recognition.start();
-  recognition.onresult = e => {
-    document.getElementById("voiceInput").value = e.results[0][0].transcript;
-  };
 }
 </script>
 
@@ -205,15 +137,29 @@ const ctx = document.getElementById('expenseChart').getContext('2d');
 const data = JSON.parse(document.getElementById('chart-data').textContent);
 
 new Chart(ctx, {
-  type: 'bar',
+  type: 'doughnut',
   data: {
     labels: Object.keys(data),
     datasets: [{
       data: Object.values(data),
-      backgroundColor: ['#4e73df','#1cc88a','#36b9cc','#f6c23e','#e74a3b']
+      backgroundColor: [
+        '#4e73df',
+        '#1cc88a',
+        '#36b9cc',
+        '#f6c23e',
+        '#e74a3b'
+      ]
     }]
   },
-  options: { responsive: true, maintainAspectRatio: false }
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom'
+      }
+    }
+  }
 });
 </script>
 

@@ -1,11 +1,74 @@
 from flask import Flask, render_template, request, redirect, session
-import csv
+import sqlite3
 import os
 
 app = Flask(__name__)
 app.secret_key = "secret123"
 
-FILE_NAME = "expenses.csv"
+DATABASE = "database.db"
+
+def get_db():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_by INTEGER,
+        FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS group_members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        user_id INTEGER,
+        FOREIGN KEY (group_id) REFERENCES groups(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+
+    cursor.execute("""
+CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    description TEXT,
+    category TEXT,
+    amount REAL
+)
+""")
+
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS expense_splits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        expense_id INTEGER,
+        user_id INTEGER,
+        share_amount REAL,
+        FOREIGN KEY (expense_id) REFERENCES expenses(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
 
 CATEGORY_KEYWORDS = {
     "Food": ["food", "pizza", "burger", "biryani", "dinner", "lunch", "snacks", "tea", "coffee"],
@@ -50,8 +113,32 @@ def dashboard():
     if "user" not in session:
         return redirect("/login")
 
-    expenses = []
-    total = 0
+    import sqlite3
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
+    # Get all expenses
+    cursor.execute("SELECT description, category, amount FROM expenses")
+    expenses = cursor.fetchall()
+
+    # Calculate total
+    total = sum([row[2] for row in expenses])
+
+    # Calculate category totals for chart
+    category_totals = {}
+    for row in expenses:
+        cat = row[1]
+        category_totals[cat] = category_totals.get(cat, 0) + row[2]
+
+    conn.close()
+
+    return render_template(
+        "dashboard.html",
+        expenses=expenses,
+        total=total,
+        category_totals=category_totals
+    )
+
 
     # ✅ Chatbot message
     chat_reply = session.pop("chat_reply", None)
@@ -87,18 +174,32 @@ def dashboard():
 # ---------------------------
 # ADD EXPENSE
 # ---------------------------
+
 @app.route("/add", methods=["POST"])
 def add():
     if "user" not in session:
         return redirect("/login")
 
-    name = request.form.get("name", "").strip()
-    category = request.form.get("category", "").strip()
-    amount = request.form.get("amount", "").strip()
+    description = request.form.get("name")
+    category = request.form.get("category")
+    amount = request.form.get("amount")
 
-    # Basic validation (Week 8)
-    if name == "" or category == "" or amount == "":
+    if not description or not amount:
         return redirect("/dashboard")
+
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO expenses (group_id, paid_by, description, category, amount)
+    VALUES (?, ?, ?, ?, ?)
+    """, (1, 1, description, amount))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
+
 
     try:
         amount = int(amount)
@@ -227,6 +328,7 @@ def export():
 
 
 if __name__ == "__main__":
+    init_db()
     app.run(debug=True)
 import webbrowser
 
