@@ -416,7 +416,74 @@ def chat_add():
     conn.close()
 
     return f"✅ Added ₹{amount} under {category}"
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
 
+@app.route("/download_pdf")
+def download_pdf():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT description, category, amount, expense_date
+        FROM expenses
+        WHERE user_id = ?
+        ORDER BY expense_date DESC
+    """, (session["user_id"],))
+
+    expenses = cursor.fetchall()
+    conn.close()
+
+    filename = "expense_report.pdf"
+    doc = SimpleDocTemplate(filename)
+    pdfmetrics.registerFont(TTFont("DejaVuSans", "DejaVuSans.ttf"))
+    elements = []
+
+    styles = getSampleStyleSheet()
+    elements.append(Paragraph("<b>Expense Report</b>", styles["Title"]))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Table Data
+    data = [["Date", "Description", "Category", "Amount"]]
+
+    total_amount = 0
+
+    for e in expenses:
+        data.append([
+            str(e["expense_date"]),
+            e["description"],
+            e["category"],
+            f"₹{e['amount']}"
+        ])
+        total_amount += e["amount"]
+
+    # Add total row
+    data.append(["", "", "Total", f"₹{total_amount}"])
+
+    table = Table(data, colWidths=[1.2*inch, 1.8*inch, 1.2*inch, 1*inch])
+
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.grey),
+        ("TEXTCOLOR",(0,0),(-1,0),colors.whitesmoke),
+        ("GRID", (0,0), (-1,-1), 1, colors.black),
+        ("FONTNAME", (0,0), (-1,-1), "DejaVuSans"),
+        ("FONTSIZE", (0,0), (-1,-1), 10),
+        ("ALIGN", (3,1), (3,-1), "RIGHT"),
+        ("BACKGROUND", (0,-1), (-1,-1), colors.lightgrey)
+    ]))
+
+    elements.append(table)
+
+    doc.build(elements)
+
+    return send_file(filename, as_attachment=True)
 
 # ---------------------------
 # RUN
