@@ -230,3 +230,14 @@ body {
     border-radius: 8px;
     text-decoration: none;
 }
+.bg-red {
+    background: red;
+}
+
+.bg-orange {
+    background: orange;
+}
+
+.bg-green {
+    background: green;
+}

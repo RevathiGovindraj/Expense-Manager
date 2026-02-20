@@ -47,16 +47,74 @@
             <h2>Overview</h2>
 
             <div class="cards">
-                <div class="card">
-                    <h3>Total Expense</h3>
-                    <p>₹{{ total }}</p>
-                </div>
-                <div class="card">
-                    <h3>Total Entries</h3>
-                    <p>{{ expenses | length }}</p>
-                </div>
-            </div>
+    <div class="card">
+        <h3>Total Expense</h3>
+        <p>₹{{ total }}</p>
+    </div>
 
+    <div class="card">
+        <h3>This Month</h3>
+        <p>₹{{ month_total }}</p>
+    </div>
+
+    <div class="card">
+        <h3>Last Month</h3>
+        <p>₹{{ last_month_total }}</p>
+    </div>
+
+    <div class="card">
+        <h3>Change</h3>
+        <p>
+            {% if percent_change > 0 %}
+                🔺 {{ percent_change }}%
+            {% elif percent_change < 0 %}
+                🔻 {{ percent_change }}%
+            {% else %}
+                0%
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="card" style="margin-top:20px;">
+    <h3>Monthly Budget</h3>
+
+    <form action="/set_budget" method="POST">
+        <input type="number" name="budget" placeholder="Set Monthly Budget" required>
+        <button type="submit">Save</button>
+    </form>
+
+    {% if budget > 0 %}
+        <p>Budget: ₹{{ budget }}</p>
+        <p>Used: {{ budget_percent }}%</p>
+
+        <div style="background:#ddd;height:20px;border-radius:10px;">
+            <div 
+                class="
+                    {% if budget_percent >= 100 %}
+                        bg-red
+                    {% elif budget_percent >= 80 %}
+                        bg-orange
+                    {% else %}
+                        bg-green
+                    {% endif %}
+                "
+                style="width: {{ budget_percent }}%; height:20px; border-radius:10px;">
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top:20px;">
+    <h3>AI Financial Insights</h3>
+    <ul>
+        {% for tip in insights %}
+            <li>{{ tip }}</li>
+        {% endfor %}
+    </ul>
+</div>
+<div class="card" style="margin-top:20px;">
+ 
             <div class="chart-box">
                 <canvas id="expenseChart"></canvas>
             </div>
@@ -87,7 +145,23 @@
 
         <div id="history" class="tab-content">
             <h2>Expense History</h2>
-
+<form method="GET" action="/dashboard" style="margin-bottom:15px;">
+    <input type="month" name="month">
+    <input type="text" name="search" placeholder="Search name">
+    <select name="category">
+      <select name="sort">
+    <option value="">Sort By</option>
+    <option value="high">Highest Amount</option>
+    <option value="low">Lowest Amount</option>
+</select>
+        <option value="">All Categories</option>
+        <option value="Food">Food</option>
+        <option value="Shopping">Shopping</option>
+        <option value="Transport">Transport</option>
+        <option value="Other">Other</option>
+    </select>
+    <button type="submit">Filter</button>
+</form>
             <table class="expense-table">
                 <tr>
                     <th>Name</th>

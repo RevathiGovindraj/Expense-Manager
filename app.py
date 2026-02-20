@@ -136,9 +136,8 @@ def dashboard():
     cursor = conn.cursor()
 
     # ===============================
-    # Monthly Summary Calculation
+    # Monthly Summary
     # ===============================
-
     current_month = datetime.now().strftime("%Y-%m")
 
     cursor.execute("""
@@ -170,9 +169,8 @@ def dashboard():
         percent_change = 0
 
     # ===============================
-    # Budget Calculation
+    # Budget
     # ===============================
-
     cursor.execute("""
         SELECT amount FROM budgets
         WHERE user_id = ? AND month = ?
@@ -187,16 +185,41 @@ def dashboard():
         budget_percent = 0
 
     # ===============================
-    # Fetch All Expenses
+    # Filtering
     # ===============================
+    selected_month = request.args.get("month")
+    search = request.args.get("search")
+    selected_category = request.args.get("category")
+    sort = request.args.get("sort")
 
-    cursor.execute("""
+    query = """
         SELECT id, description, category, amount, expense_date
         FROM expenses
         WHERE user_id = ?
-        ORDER BY created_at DESC
-    """, (session["user_id"],))
+    """
 
+    params = [session["user_id"]]
+
+    if selected_month:
+        query += " AND strftime('%Y-%m', expense_date) = ?"
+        params.append(selected_month)
+
+    if search:
+        query += " AND description LIKE ?"
+        params.append(f"%{search}%")
+
+    if selected_category:
+        query += " AND category = ?"
+        params.append(selected_category)
+
+    if sort == "high":
+        query += " ORDER BY amount DESC"
+    elif sort == "low":
+        query += " ORDER BY amount ASC"
+    else:
+        query += " ORDER BY created_at DESC"
+
+    cursor.execute(query, params)
     expenses = cursor.fetchall()
 
     total = sum([row["amount"] for row in expenses])
@@ -205,6 +228,25 @@ def dashboard():
     for row in expenses:
         cat = row["category"]
         category_totals[cat] = category_totals.get(cat, 0) + row["amount"]
+
+    # ===============================
+    # AI Insights
+    # ===============================
+    insights = []
+
+    if category_totals:
+        top_category = max(category_totals, key=category_totals.get)
+        insights.append(f"You spend most on {top_category}.")
+
+    if percent_change > 0:
+        insights.append("Your spending increased compared to last month.")
+    elif percent_change < 0:
+        insights.append("Good job! Spending decreased from last month.")
+
+    if budget_percent >= 100:
+        insights.append("⚠ Budget exceeded! Control your expenses.")
+    elif budget_percent >= 80:
+        insights.append("⚠ You are close to exceeding your budget.")
 
     conn.close()
 
@@ -217,8 +259,10 @@ def dashboard():
         last_month_total=last_month_total,
         percent_change=round(percent_change, 2),
         budget=budget,
-        budget_percent=round(budget_percent, 2)
+        budget_percent=round(budget_percent, 2),
+        insights=insights
     )
+
 # ---------------------------
 # ADD EXPENSE
 # ---------------------------
@@ -285,7 +329,50 @@ def delete(id):
 
     return redirect("/dashboard")
 
+# ---------------------------
+# SET BUDGET
+# ---------------------------
+@app.route("/set_budget", methods=["POST"])
+def set_budget():
+    if "user_id" not in session:
+        return redirect("/login")
 
+    amount = request.form.get("budget")
+
+    try:
+        amount = float(amount)
+    except:
+        return redirect("/dashboard")
+
+    current_month = datetime.now().strftime("%Y-%m")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Check if budget already exists
+    cursor.execute("""
+        SELECT * FROM budgets
+        WHERE user_id = ? AND month = ?
+    """, (session["user_id"], current_month))
+
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute("""
+            UPDATE budgets
+            SET amount = ?
+            WHERE user_id = ? AND month = ?
+        """, (amount, session["user_id"], current_month))
+    else:
+        cursor.execute("""
+            INSERT INTO budgets (user_id, month, amount)
+            VALUES (?, ?, ?)
+        """, (session["user_id"], current_month, amount))
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
 # ---------------------------
 # LOGOUT
 # ---------------------------
