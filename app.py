@@ -1,4 +1,7 @@
-from flask import Flask, render_template, request, redirect, session
+from flask import Flask, render_template, request, redirect, session, send_file
+from modules.ai_engine import detect_category
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
 import sqlite3
 import os
 
@@ -7,16 +10,24 @@ app.secret_key = "secret123"
 
 DATABASE = "database.db"
 
+
+# ---------------------------
+# DATABASE CONNECTION
+# ---------------------------
 def get_db():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+# ---------------------------
+# INITIALIZE DATABASE
+# ---------------------------
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
+    # Users table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,59 +37,36 @@ def init_db():
     )
     """)
 
+    # Expenses table
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS groups (
+    CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        created_by INTEGER,
-        FOREIGN KEY (created_by) REFERENCES users(id)
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS group_members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id INTEGER,
         user_id INTEGER,
-        FOREIGN KEY (group_id) REFERENCES groups(id),
+        description TEXT NOT NULL,
+        category TEXT NOT NULL,
+        amount REAL NOT NULL,
+        expense_date DATE DEFAULT CURRENT_DATE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )
     """)
 
+    # Budgets table  ✅ NEW
     cursor.execute("""
-CREATE TABLE IF NOT EXISTS expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    description TEXT,
-    category TEXT,
-    amount REAL
-)
-""")
-
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS expense_splits (
+    CREATE TABLE IF NOT EXISTS budgets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        expense_id INTEGER,
         user_id INTEGER,
-        share_amount REAL,
-        FOREIGN KEY (expense_id) REFERENCES expenses(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
+        month TEXT,
+        amount REAL,
+        FOREIGN KEY(user_id) REFERENCES users(id)
     )
     """)
 
     conn.commit()
     conn.close()
 
-
-CATEGORY_KEYWORDS = {
-    "Food": ["food", "pizza", "burger", "biryani", "dinner", "lunch", "snacks", "tea", "coffee"],
-    "Travel": ["travel", "uber", "ola", "bus", "train", "taxi", "petrol", "fuel", "cab"],
-    "Shopping": ["shopping", "dress", "clothes", "amazon", "flipkart", "mall"],
-    "Bills": ["bill", "electricity", "current", "water", "recharge", "wifi", "rent"],
-}
-
 # ---------------------------
-# INTRO PAGE (NEW)
+# HOME
 # ---------------------------
 @app.route("/")
 def home():
@@ -86,18 +74,25 @@ def home():
 
 
 # ---------------------------
-# LOGIN PAGE
+# LOGIN
 # ---------------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
 
     if request.method == "POST":
-        username = request.form["username"]
+        email = request.form["email"]
         password = request.form["password"]
 
-        if username == "admin" and password == "admin":
-            session["user"] = username
+        conn = get_db()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+        user = cursor.fetchone()
+        conn.close()
+
+        if user and check_password_hash(user["password"], password):
+            session["user_id"] = user["id"]
             return redirect("/dashboard")
         else:
             error = "Invalid credentials"
@@ -105,30 +100,111 @@ def login():
     return render_template("login.html", error=error)
 
 
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        name = request.form["name"]
+        email = request.form["email"]
+        password = generate_password_hash(request.form["password"])
+
+        conn = get_db()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO users (name, email, password)
+                VALUES (?, ?, ?)
+            """, (name, email, password))
+            conn.commit()
+        except:
+            return "Email already exists"
+
+        conn.close()
+        return redirect("/login")
+
+    return render_template("signup.html")
+
 # ---------------------------
-# DASHBOARD PAGE
+# DASHBOARD
 # ---------------------------
 @app.route("/dashboard")
 def dashboard():
-    if "user" not in session:
+    if "user_id" not in session:
         return redirect("/login")
 
-    import sqlite3
-    conn = sqlite3.connect("database.db")
+    conn = get_db()
     cursor = conn.cursor()
 
-    # Get all expenses
-    cursor.execute("SELECT description, category, amount FROM expenses")
+    # ===============================
+    # Monthly Summary Calculation
+    # ===============================
+
+    current_month = datetime.now().strftime("%Y-%m")
+
+    cursor.execute("""
+        SELECT SUM(amount) as total
+        FROM expenses
+        WHERE user_id = ?
+        AND strftime('%Y-%m', expense_date) = ?
+    """, (session["user_id"], current_month))
+
+    row = cursor.fetchone()
+    month_total = row["total"] if row["total"] else 0
+
+    last_month_date = datetime.now().replace(day=1) - timedelta(days=1)
+    last_month = last_month_date.strftime("%Y-%m")
+
+    cursor.execute("""
+        SELECT SUM(amount) as total
+        FROM expenses
+        WHERE user_id = ?
+        AND strftime('%Y-%m', expense_date) = ?
+    """, (session["user_id"], last_month))
+
+    last_row = cursor.fetchone()
+    last_month_total = last_row["total"] if last_row["total"] else 0
+
+    if last_month_total > 0:
+        percent_change = ((month_total - last_month_total) / last_month_total) * 100
+    else:
+        percent_change = 0
+
+    # ===============================
+    # Budget Calculation
+    # ===============================
+
+    cursor.execute("""
+        SELECT amount FROM budgets
+        WHERE user_id = ? AND month = ?
+    """, (session["user_id"], current_month))
+
+    budget_row = cursor.fetchone()
+    budget = budget_row["amount"] if budget_row else 0
+
+    if budget > 0:
+        budget_percent = (month_total / budget) * 100
+    else:
+        budget_percent = 0
+
+    # ===============================
+    # Fetch All Expenses
+    # ===============================
+
+    cursor.execute("""
+        SELECT id, description, category, amount, expense_date
+        FROM expenses
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (session["user_id"],))
+
     expenses = cursor.fetchall()
 
-    # Calculate total
-    total = sum([row[2] for row in expenses])
+    total = sum([row["amount"] for row in expenses])
 
-    # Calculate category totals for chart
     category_totals = {}
     for row in expenses:
-        cat = row[1]
-        category_totals[cat] = category_totals.get(cat, 0) + row[2]
+        cat = row["category"]
+        category_totals[cat] = category_totals.get(cat, 0) + row["amount"]
 
     conn.close()
 
@@ -136,64 +212,55 @@ def dashboard():
         "dashboard.html",
         expenses=expenses,
         total=total,
-        category_totals=category_totals
+        category_totals=category_totals,
+        month_total=month_total,
+        last_month_total=last_month_total,
+        percent_change=round(percent_change, 2),
+        budget=budget,
+        budget_percent=round(budget_percent, 2)
     )
-
-
-    # ✅ Chatbot message
-    chat_reply = session.pop("chat_reply", None)
-
-    # ✅ Chart data (category totals)
-    category_totals = {}
-
-    if os.path.exists(FILE_NAME):
-        with open(FILE_NAME, mode="r") as file:
-            reader = csv.reader(file)
-            for row in reader:
-                if len(row) >= 3:
-                    expenses.append(row)
-                    total += int(row[2])
-
-                    cat = row[1]
-                    amt = int(row[2])
-
-                    if cat in category_totals:
-                        category_totals[cat] += amt
-                    else:
-                        category_totals[cat] = amt
-
-    return render_template(
-        "dashboard.html",
-        expenses=expenses,
-        total=total,
-        chat_reply=chat_reply,
-        category_totals=category_totals
-    )
-
-
 # ---------------------------
 # ADD EXPENSE
 # ---------------------------
-
 @app.route("/add", methods=["POST"])
 def add():
-    if "user" not in session:
+    if "user_id" not in session:
         return redirect("/login")
 
     description = request.form.get("name")
-    category = request.form.get("category")
+    category = detect_category(description)
     amount = request.form.get("amount")
 
     if not description or not amount:
         return redirect("/dashboard")
 
-    conn = sqlite3.connect("database.db")
+    try:
+        amount = float(amount)
+    except:
+        return redirect("/dashboard")
+
+    conn = get_db()
     cursor = conn.cursor()
 
+    # Duplicate detection
     cursor.execute("""
-        INSERT INTO expenses (group_id, paid_by, description, category, amount)
-    VALUES (?, ?, ?, ?, ?)
-    """, (1, 1, description, amount))
+        SELECT * FROM expenses
+        WHERE user_id = ?
+        AND description = ?
+        AND amount = ?
+        AND DATE(created_at) = DATE('now')
+    """, (session["user_id"], description, amount))
+
+    duplicate = cursor.fetchone()
+
+    if duplicate:
+        conn.close()
+        return "⚠️ Duplicate expense detected!"
+
+    cursor.execute("""
+        INSERT INTO expenses (user_id, description, category, amount)
+        VALUES (?, ?, ?, ?)
+    """, (session["user_id"], description, category, amount))
 
     conn.commit()
     conn.close()
@@ -201,109 +268,22 @@ def add():
     return redirect("/dashboard")
 
 
-    try:
-        amount = int(amount)
-        if amount <= 0:
-            return redirect("/dashboard")
-    except:
-        return redirect("/dashboard")
-
-    with open(FILE_NAME, mode="a", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow([name, category, amount])
-
-    return redirect("/dashboard")
-
-
-# ---------------------------
-# CHATBOT ADD EXPENSE
-# ---------------------------
-@app.route("/chat_add", methods=["POST"])
-def chat_add():
-    if "user" not in session:
-        return redirect("/login")
-
-    message = request.form["message"].lower().strip()
-    parts = message.split()
-
-    # Expected: add 200 pizza
-    if len(parts) < 3 or parts[0] != "add":
-        session["chat_reply"] = "❌ Format: Add <amount> <expense name>"
-        return redirect("/dashboard")
-
-    try:
-        amount = int(parts[1])
-    except:
-        session["chat_reply"] = "❌ Amount must be a number"
-        return redirect("/dashboard")
-
-    # Expense name text (pizza / uber cab / electricity bill)
-    name_text = " ".join(parts[2:]).strip()
-    name = name_text.capitalize() if name_text else "Chat Expense"
-
-    # Auto detect category
-    category = "Other"
-    for cat, keywords in CATEGORY_KEYWORDS.items():
-        for word in keywords:
-            if word in message:
-                category = cat
-                break
-        if category != "Other":
-            break
-
-    # Save to CSV
-    with open(FILE_NAME, mode="a", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow([name, category, amount])
-
-    # Success message
-    session["chat_reply"] = f"✅ Added: {name} - {category} - ₹{amount}"
-    return redirect("/dashboard")
-
-
 # ---------------------------
 # DELETE EXPENSE
 # ---------------------------
-@app.route("/delete/<int:index>")
-def delete(index):
-    if "user" not in session:
+@app.route("/delete/<int:id>")
+def delete(id):
+    if "user_id" not in session:
         return redirect("/login")
 
-    rows = []
+    conn = get_db()
+    cursor = conn.cursor()
 
-    if os.path.exists(FILE_NAME):
-        with open(FILE_NAME, mode="r") as file:
-            reader = csv.reader(file)
-            rows = list(reader)
-
-    if 0 <= index < len(rows):
-        rows.pop(index)
-
-    with open(FILE_NAME, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerows(rows)
+    cursor.execute("DELETE FROM expenses WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
 
     return redirect("/dashboard")
-@app.route("/edit/<int:index>", methods=["GET","POST"])
-def edit(index):
-    if "user" not in session:
-        return redirect("/")
-
-    rows = []
-    with open(FILE_NAME, "r") as f:
-        rows = list(csv.reader(f))
-
-    if request.method == "POST":
-        rows[index] = [
-            request.form["name"],
-            request.form["category"],
-            request.form["amount"]
-        ]
-        with open(FILE_NAME, "w", newline="") as f:
-            csv.writer(f).writerows(rows)
-        return redirect("/dashboard")
-
-    return render_template("edit.html", item=rows[index], index=index)
 
 
 # ---------------------------
@@ -313,25 +293,47 @@ def edit(index):
 def logout():
     session.clear()
     return redirect("/login")
-from flask import send_file
 
-@app.route("/export")
-def export():
-    if "user" not in session:
-        return redirect("/")
+@app.route("/chat_add", methods=["POST"])
+def chat_add():
+    if "user_id" not in session:
+        return "Login required"
 
-    return send_file(
-        FILE_NAME,
-        as_attachment=True,
-        download_name="expenses.csv"
-    )
+    message = request.form.get("message", "").strip().lower()
+
+    if not message:
+        return "Please enter a message"
+
+    parts = message.split()
+
+    if len(parts) < 3 or parts[0] != "add":
+        return "Format: Add <amount> <description>"
+
+    try:
+        amount = float(parts[1])
+    except:
+        return "Amount must be a number"
+
+    description = " ".join(parts[2:])
+    category = detect_category(description)
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO expenses (user_id, description, category, amount)
+        VALUES (?, ?, ?, ?)
+    """, (session["user_id"], description, category, amount))
+
+    conn.commit()
+    conn.close()
+
+    return f"✅ Added ₹{amount} under {category}"
 
 
+# ---------------------------
+# RUN
+# ---------------------------
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
-import webbrowser
-
-if __name__ == "__main__":
-    webbrowser.open("http://127.0.0.1:5000/")
     app.run(debug=True)

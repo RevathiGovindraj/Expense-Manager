@@ -28,11 +28,16 @@
       {% endif %}
 
       <form method="POST" action="/login" class="login-form">
-        <input type="text" name="username" placeholder="Username" required>
+        <input type="email" name="email" placeholder="Email" required>
         <input type="password" name="password" placeholder="Password" required>
 
         <button type="submit">Login</button>
       </form>
+
+      <p style="margin-top:15px;">
+        Don't have an account?
+        <a href="/signup">Create Account</a>
+      </p>
 
     </div>
   </div>
