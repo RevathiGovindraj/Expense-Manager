@@ -241,3 +241,41 @@ body {
 .bg-green {
     background: green;
 }
+/* ===============================
+   DARK MODE
+================================= */
+
+body.dark-mode {
+    background-color: #121212;
+    color: #ffffff;
+}
+
+body.dark-mode .main-content {
+    background-color: #1e1e1e;
+}
+
+body.dark-mode .card {
+    background-color: #2a2a2a;
+    color: #ffffff;
+}
+
+body.dark-mode .expense-table {
+    background-color: #2a2a2a;
+    color: #ffffff;
+}
+
+body.dark-mode .expense-table th {
+    background-color: #333333;
+}
+
+body.dark-mode input,
+body.dark-mode select {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #555;
+}
+
+body.dark-mode button {
+    background-color: #444;
+    color: white;
+}

@@ -11,8 +11,8 @@
 
 <div class="layout">
 
+    <!-- SIDEBAR -->
     <div class="sidebar" id="sidebar">
-
         <div class="sidebar-header">
             <h2 class="logo">₹ Expense</h2>
             <button class="collapse-btn" onclick="toggleSidebar()">
@@ -35,94 +35,90 @@
             <span>History</span>
         </button>
 
+        <button onclick="toggleTheme()" class="nav-btn">
+            <i class="fas fa-moon"></i>
+            <span>Toggle Theme</span>
+        </button>
+
         <a href="/logout" class="logout-link">
             <i class="fas fa-sign-out-alt"></i>
             <span>Logout</span>
         </a>
     </div>
 
+    <!-- MAIN CONTENT -->
     <div class="main-content">
 
+        <!-- DASHBOARD TAB -->
         <div id="dashboard" class="tab-content active">
+
             <h2>Overview</h2>
 
             <div class="cards">
-    <div class="card">
-        <h3>Total Expense</h3>
-        <p>₹{{ total }}</p>
-    </div>
+                <div class="card">
+                    <h3>Total Expense</h3>
+                    <p>₹{{ total }}</p>
+                </div>
 
-    <div class="card">
-        <h3>This Month</h3>
-        <p>₹{{ month_total }}</p>
-    </div>
+                <div class="card">
+                    <h3>This Month</h3>
+                    <p>₹{{ month_total }}</p>
+                </div>
 
-    <div class="card">
-        <h3>Last Month</h3>
-        <p>₹{{ last_month_total }}</p>
-    </div>
+                <div class="card">
+                    <h3>Last Month</h3>
+                    <p>₹{{ last_month_total }}</p>
+                </div>
 
-    <div class="card">
-        <h3>Change</h3>
-        <p>
-            {% if percent_change > 0 %}
-                🔺 {{ percent_change }}%
-            {% elif percent_change < 0 %}
-                🔻 {{ percent_change }}%
-            {% else %}
-                0%
-            {% endif %}
-        </p>
-    </div>
-</div>
-
-<div class="card" style="margin-top:20px;">
-    <h3>Monthly Budget</h3>
-
-    <form action="/set_budget" method="POST">
-        <input type="number" name="budget" placeholder="Set Monthly Budget" required>
-        <button type="submit">Save</button>
-    </form>
-
-    {% if budget > 0 %}
-        <p>Budget: ₹{{ budget }}</p>
-        <p>Used: {{ budget_percent }}%</p>
-
-        <div style="background:#ddd;height:20px;border-radius:10px;">
-            <div 
-                class="
-                    {% if budget_percent >= 100 %}
-                        bg-red
-                    {% elif budget_percent >= 80 %}
-                        bg-orange
-                    {% else %}
-                        bg-green
-                    {% endif %}
-                "
-                style="width: {{ budget_percent }}%; height:20px; border-radius:10px;">
+                <div class="card">
+                    <h3>Change</h3>
+                    <p>{{ percent_change }}%</p>
+                </div>
             </div>
-        </div>
-    {% endif %}
-</div>
 
-<div class="card" style="margin-top:20px;">
-    <h3>AI Financial Insights</h3>
-    <ul>
-        {% for tip in insights %}
-            <li>{{ tip }}</li>
-        {% endfor %}
-    </ul>
-</div>
-<div class="card" style="margin-top:20px;">
-  <a href="/download_pdf">
-    <button style="margin-top:15px;">Download PDF Report</button>
-</a>
- 
-            <div class="chart-box">
+            <div class="card" style="margin-top:20px;">
+                <h3>Monthly Budget</h3>
+
+                <form action="/set_budget" method="POST">
+                    <input type="number" name="budget" placeholder="Set Monthly Budget" required>
+                    <button type="submit">Save</button>
+                </form>
+
+                {% if budget > 0 %}
+                    <p>Budget: ₹{{ budget }}</p>
+                    <p>Used: {{ budget_percent }}%</p>
+
+                    <div style="background:#ddd;height:20px;border-radius:10px;">
+                        <div style="width: {{ budget_percent }}%; height:20px; border-radius:10px; background:green;">
+                        </div>
+                    </div>
+                {% endif %}
+            </div>
+
+            <div class="card" style="margin-top:20px;">
+                <h3>AI Financial Insights</h3>
+                <ul>
+                    {% for tip in insights %}
+                        <li>{{ tip }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <div class="card" style="margin-top:20px;">
+                <a href="/download_pdf">
+                    <button>Download PDF Report</button>
+                </a>
+            </div>
+
+            <!-- CHART -->
+            <div class="card" style="margin-top:20px;">
+                <h3>Category Breakdown</h3>
                 <canvas id="expenseChart"></canvas>
             </div>
+
         </div>
 
+        <!-- ADD TAB -->
         <div id="add" class="tab-content">
             <h2>Add Expense</h2>
 
@@ -134,37 +130,30 @@
                 </form>
 
                 <hr>
+                <hr>
 
-                <h3><i class="fas fa-chart-line"></i> Smart Expense Assistant</h3>
+<h3>Upload Receipt</h3>
+
+<form action="/upload_receipt" method="POST" enctype="multipart/form-data">
+    <input type="file" name="receipt" accept="image/*" required>
+    <button type="submit">Upload & Auto Add</button>
+</form>
+
+                <h3>Smart Expense Assistant</h3>
 
                 <div class="chat-box" id="chat-box">
                     <div class="bot-message">Try: <b>Add 200 groceries</b></div>
                 </div>
 
                 <input type="text" id="chat-input" placeholder="Type: Add 500 shopping...">
-                <button class="chat-send-btn" onclick="sendMessage()">Send</button>
+                <button onclick="sendMessage()">Send</button>
             </div>
         </div>
 
+        <!-- HISTORY TAB -->
         <div id="history" class="tab-content">
             <h2>Expense History</h2>
-<form method="GET" action="/dashboard" style="margin-bottom:15px;">
-    <input type="month" name="month">
-    <input type="text" name="search" placeholder="Search name">
-    <select name="category">
-      <select name="sort">
-    <option value="">Sort By</option>
-    <option value="high">Highest Amount</option>
-    <option value="low">Lowest Amount</option>
-</select>
-        <option value="">All Categories</option>
-        <option value="Food">Food</option>
-        <option value="Shopping">Shopping</option>
-        <option value="Transport">Transport</option>
-        <option value="Other">Other</option>
-    </select>
-    <button type="submit">Filter</button>
-</form>
+
             <table class="expense-table">
                 <tr>
                     <th>Name</th>
@@ -178,7 +167,9 @@
                     <td>{{ e["description"] }}</td>
                     <td>{{ e["category"] }}</td>
                     <td>₹{{ e["amount"] }}</td>
-                    <td><a class="delete-btn" href="/delete/{{ e['id'] }}">Delete</a></td>
+                    <td>
+                        <a class="delete-btn" href="/delete/{{ e['id'] }}">Delete</a>
+                    </td>
                 </tr>
                 {% endfor %}
             </table>
@@ -187,6 +178,7 @@
     </div>
 </div>
 
+<!-- TAB SCRIPT -->
 <script>
 function openTab(evt, tabId) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -194,51 +186,54 @@ function openTab(evt, tabId) {
     document.getElementById(tabId).classList.add('active');
     evt.currentTarget.classList.add('active');
 }
-
-function toggleSidebar() {
-    document.getElementById("sidebar").classList.toggle("collapsed");
-}
-
-function sendMessage() {
-    const input = document.getElementById("chat-input");
-    const message = input.value.trim();
-    if (!message) return;
-
-    const chatBox = document.getElementById("chat-box");
-    chatBox.innerHTML += `<div class="user-message">${message}</div>`;
-
-    fetch("/chat_add", {
-        method: "POST",
-        headers: {"Content-Type": "application/x-www-form-urlencoded"},
-        body: "message=" + encodeURIComponent(message)
-    })
-    .then(response => response.text())
-    .then(data => {
-        chatBox.innerHTML += `<div class="bot-message">${data}</div>`;
-        chatBox.scrollTop = chatBox.scrollHeight;
-    });
-
-    input.value = "";
-}
 </script>
 
 <script type="application/json" id="chart-data">
-  {{ category_totals | tojson }}
+    {{ category_totals | tojson }}
 </script>
 
+<!-- CHART SCRIPT -->
 <script>
-const ctx = document.getElementById('expenseChart').getContext('2d');
-const data = JSON.parse(document.getElementById('chart-data').textContent);
+document.addEventListener("DOMContentLoaded", function() {
 
-new Chart(ctx, {
-  type: 'doughnut',
-  data: {
-    labels: Object.keys(data),
-    datasets: [{
-      data: Object.values(data)
-    }]
-  }
+    const chartElement = document.getElementById("expenseChart");
+    if (!chartElement) return;
+
+    const rawData = document.getElementById("chart-data").textContent;
+    const chartData = JSON.parse(rawData);
+
+    if (!chartData || Object.keys(chartData).length === 0) return;
+
+    new Chart(chartElement, {
+        type: "doughnut",
+        data: {
+            labels: Object.keys(chartData),
+            datasets: [{
+                data: Object.values(chartData)
+            }]
+        }
+    });
+
 });
+</script>
+
+<!-- TOGGLE THEME SCRIPT -->
+<script>
+function toggleTheme() {
+    document.body.classList.toggle("dark-mode");
+
+    if (document.body.classList.contains("dark-mode")) {
+        localStorage.setItem("theme", "dark");
+    } else {
+        localStorage.setItem("theme", "light");
+    }
+}
+
+window.onload = function() {
+    if (localStorage.getItem("theme") === "dark") {
+        document.body.classList.add("dark-mode");
+    }
+}
 </script>
 
 </body>

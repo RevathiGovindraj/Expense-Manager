@@ -4,6 +4,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import sqlite3
 import os
+import pytesseract
+from PIL import Image
+import re
+import os
+
+# Tell pytesseract where Tesseract is installed
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 app = Flask(__name__)
 app.secret_key = "secret123"
@@ -138,6 +145,7 @@ def dashboard():
     # ===============================
     # Monthly Summary
     # ===============================
+
     current_month = datetime.now().strftime("%Y-%m")
 
     cursor.execute("""
@@ -171,6 +179,7 @@ def dashboard():
     # ===============================
     # Budget
     # ===============================
+
     cursor.execute("""
         SELECT amount FROM budgets
         WHERE user_id = ? AND month = ?
@@ -185,8 +194,9 @@ def dashboard():
         budget_percent = 0
 
     # ===============================
-    # Filtering
+    # Expenses + Filtering
     # ===============================
+
     selected_month = request.args.get("month")
     search = request.args.get("search")
     selected_category = request.args.get("category")
@@ -230,23 +240,41 @@ def dashboard():
         category_totals[cat] = category_totals.get(cat, 0) + row["amount"]
 
     # ===============================
+    # Monthly Trend Data
+    # ===============================
+
+    cursor.execute("""
+        SELECT strftime('%Y-%m', expense_date) as month,
+               SUM(amount) as total
+        FROM expenses
+        WHERE user_id = ?
+        GROUP BY month
+        ORDER BY month
+    """, (session["user_id"],))
+
+    trend_data = cursor.fetchall()
+
+    months = [row["month"] for row in trend_data]
+    month_totals = [row["total"] for row in trend_data]
+
+    # ===============================
     # AI Insights
     # ===============================
-    insights = []
 
+    insights = []
     if category_totals:
         top_category = max(category_totals, key=category_totals.get)
         insights.append(f"You spend most on {top_category}.")
 
     if percent_change > 0:
-        insights.append("Your spending increased compared to last month.")
+        insights.append("Spending increased compared to last month.")
     elif percent_change < 0:
-        insights.append("Good job! Spending decreased from last month.")
+        insights.append("Spending decreased compared to last month.")
 
     if budget_percent >= 100:
-        insights.append("⚠ Budget exceeded! Control your expenses.")
+        insights.append("You have exceeded your budget!")
     elif budget_percent >= 80:
-        insights.append("⚠ You are close to exceeding your budget.")
+        insights.append("Warning: You have used more than 80% of your budget.")
 
     conn.close()
 
@@ -260,9 +288,10 @@ def dashboard():
         percent_change=round(percent_change, 2),
         budget=budget,
         budget_percent=round(budget_percent, 2),
-        insights=insights
+        insights=insights,
+        months=months,
+        month_totals=month_totals
     )
-
 # ---------------------------
 # ADD EXPENSE
 # ---------------------------
@@ -484,6 +513,54 @@ def download_pdf():
     doc.build(elements)
 
     return send_file(filename, as_attachment=True)
+
+@app.route("/upload_receipt", methods=["POST"])
+def upload_receipt():
+    if "receipt" not in request.files:
+        return redirect("/dashboard")
+
+    file = request.files["receipt"]
+
+    if file.filename == "":
+        return redirect("/dashboard")
+
+    filepath = os.path.join("uploads", file.filename)
+    file.save(filepath)
+
+    # Extract text from image
+    text = pytesseract.image_to_string(Image.open(filepath))
+
+    # Find amount using regex
+    amounts = re.findall(r"\d+\.\d+|\d+", text)
+
+    amount = 0
+    if amounts:
+        amount = max([float(a) for a in amounts])
+
+    # Guess category
+    text_lower = text.lower()
+
+    if any(word in text_lower for word in ["restaurant", "food", "cafe", "dine"]):
+        category = "Food"
+    elif any(word in text_lower for word in ["mall", "shopping", "store"]):
+        category = "Shopping"
+    elif any(word in text_lower for word in ["uber", "ola", "taxi", "bus"]):
+        category = "Transport"
+    else:
+        category = "Other"
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT INTO expenses (description, amount, category, user_id) VALUES (?, ?, ?, ?)",
+        ("Receipt Expense", amount, category, session["user_id"])
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
 
 # ---------------------------
 # RUN
