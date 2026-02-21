@@ -4,6 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import sqlite3
 import os
+from expense_predictor import predict_next_month_expense
 import pytesseract
 from PIL import Image
 import re
