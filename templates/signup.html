@@ -1,6 +1,26 @@
-<form method="POST">
-  <input name="name" placeholder="Name" required>
-  <input name="email" placeholder="Email" required>
-  <input name="password" type="password" placeholder="Password" required>
-  <button type="submit">Create Account</button>
-</form>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign Up - Expense Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="center-screen">
+    <div class="auth-card">
+      <h2 class="auth-title">Create Account</h2>
+      <p class="auth-subtitle">Start tracking your expenses</p>
+
+      <form method="POST" action="/signup" class="stack">
+        <input name="name" placeholder="Name" required>
+        <input name="email" type="email" placeholder="Email" required>
+        <input name="password" type="password" placeholder="Password" required>
+        <button type="submit">Create Account</button>
+      </form>
+
+      <p class="muted" style="margin-top:14px;">Already have an account? <a href="/login">Login</a></p>
+    </div>
+  </div>
+</body>
+</html>

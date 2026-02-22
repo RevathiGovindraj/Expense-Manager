@@ -1,21 +1,24 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Edit Expense</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body class="login-page">
+<body>
+  <div class="center-screen">
+    <div class="auth-card">
+      <h2 class="auth-title">Edit Expense</h2>
+      <p class="auth-subtitle">Update this expense record</p>
 
-<div class="login-card">
-  <h2>Edit Expense</h2>
-
-  <form method="POST">
-    <input type="text" name="name" value="{{ item[0] }}" required>
-    <input type="text" name="category" value="{{ item[1] }}" required>
-    <input type="number" name="amount" value="{{ item[2] }}" required>
-    <button type="submit">Save</button>
-  </form>
-</div>
-
+      <form method="POST" class="stack">
+        <input type="text" name="name" value="{{ item[0] }}" required>
+        <input type="text" name="category" value="{{ item[1] }}" required>
+        <input type="number" name="amount" value="{{ item[2] }}" required>
+        <button type="submit">Save</button>
+      </form>
+    </div>
+  </div>
 </body>
 </html>

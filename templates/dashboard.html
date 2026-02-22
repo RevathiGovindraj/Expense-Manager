@@ -1,239 +1,307 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - Expense Tracker</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-
 <body>
-
-<div class="layout">
-
-    <!-- SIDEBAR -->
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <h2 class="logo">₹ Expense</h2>
-            <button class="collapse-btn" onclick="toggleSidebar()">
-                <i class="fas fa-bars"></i>
-            </button>
+<div class="shell">
+    <div class="topbar">
+        <h1 class="brand">Expense Tracker</h1>
+        <div class="topbar-actions">
+            <button type="button" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Theme</button>
+            <a href="/logout"><button type="button">Logout</button></a>
         </div>
-
-        <button class="nav-btn active" onclick="openTab(event,'dashboard')">
-            <i class="fas fa-chart-pie"></i>
-            <span>Dashboard</span>
-        </button>
-
-        <button class="nav-btn" onclick="openTab(event,'add')">
-            <i class="fas fa-plus-circle"></i>
-            <span>Add Expense</span>
-        </button>
-
-        <button class="nav-btn" onclick="openTab(event,'history')">
-            <i class="fas fa-clock"></i>
-            <span>History</span>
-        </button>
-
-        <button onclick="toggleTheme()" class="nav-btn">
-            <i class="fas fa-moon"></i>
-            <span>Toggle Theme</span>
-        </button>
-
-        <a href="/logout" class="logout-link">
-            <i class="fas fa-sign-out-alt"></i>
-            <span>Logout</span>
-        </a>
     </div>
 
-    <!-- MAIN CONTENT -->
-    <div class="main-content">
+    <div class="dashboard-layout">
+        <aside class="sidebar-nav">
+            <button class="nav-btn active" onclick="openTab(event, 'dashboard')">
+                <i class="fas fa-chart-line"></i> Overview
+            </button>
+            <button class="nav-btn" onclick="openTab(event, 'add')">
+                <i class="fas fa-plus-circle"></i> Add Expense
+            </button>
+            <button class="nav-btn" onclick="openTab(event, 'history')">
+                <i class="fas fa-clock-rotate-left"></i> History
+            </button>
+        </aside>
 
-        <!-- DASHBOARD TAB -->
-        <div id="dashboard" class="tab-content active">
-
-            <h2>Overview</h2>
-
-            <div class="cards">
-                <div class="card">
-                    <h3>Total Expense</h3>
-                    <p>₹{{ total }}</p>
-                </div>
-
-                <div class="card">
-                    <h3>This Month</h3>
-                    <p>₹{{ month_total }}</p>
-                </div>
-
-                <div class="card">
-                    <h3>Last Month</h3>
-                    <p>₹{{ last_month_total }}</p>
-                </div>
-
-                <div class="card">
-                    <h3>Change</h3>
-                    <p>{{ percent_change }}%</p>
-                </div>
-            </div>
-
-            <div class="card" style="margin-top:20px;">
-                <h3>Monthly Budget</h3>
-
-                <form action="/set_budget" method="POST">
-                    <input type="number" name="budget" placeholder="Set Monthly Budget" required>
-                    <button type="submit">Save</button>
-                </form>
-
-                {% if budget > 0 %}
-                    <p>Budget: ₹{{ budget }}</p>
-                    <p>Used: {{ budget_percent }}%</p>
-
-                    <div style="background:#ddd;height:20px;border-radius:10px;">
-                        <div style="width: {{ budget_percent }}%; height:20px; border-radius:10px; background:green;">
-                        </div>
+        <main class="content-panel">
+            <div id="dashboard" class="tab-content active">
+                <div class="cards">
+                    <div class="card">
+                        <h3>Total Expense</h3>
+                        <p>&#8377; {{ total }}</p>
                     </div>
-                {% endif %}
-            </div>
-
-            <div class="card" style="margin-top:20px;">
-                <h3>AI Financial Insights</h3>
-                <ul>
-                    {% for tip in insights %}
-                        <li>{{ tip }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
-
-            <div class="card" style="margin-top:20px;">
-                <a href="/download_pdf">
-                    <button>Download PDF Report</button>
-                </a>
-            </div>
-
-            <!-- CHART -->
-            <div class="card" style="margin-top:20px;">
-                <h3>Category Breakdown</h3>
-                <canvas id="expenseChart"></canvas>
-            </div>
-
-        </div>
-
-        <!-- ADD TAB -->
-        <div id="add" class="tab-content">
-            <h2>Add Expense</h2>
-
-            <div class="form-card">
-                <form method="POST" action="/add">
-                    <input type="text" name="name" placeholder="Expense Name" required>
-                    <input type="number" name="amount" placeholder="Amount" required>
-                    <button type="submit">Add Expense</button>
-                </form>
-
-                <hr>
-                <hr>
-
-<h3>Upload Receipt</h3>
-
-<form action="/upload_receipt" method="POST" enctype="multipart/form-data">
-    <input type="file" name="receipt" accept="image/*" required>
-    <button type="submit">Upload & Auto Add</button>
-</form>
-
-                <h3>Smart Expense Assistant</h3>
-
-                <div class="chat-box" id="chat-box">
-                    <div class="bot-message">Try: <b>Add 200 groceries</b></div>
+                    <div class="card">
+                        <h3>This Month</h3>
+                        <p>&#8377; {{ month_total }}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Last Month</h3>
+                        <p>&#8377; {{ last_month_total }}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Change</h3>
+                        <p>{{ percent_change }}%</p>
+                    </div>
                 </div>
 
-                <input type="text" id="chat-input" placeholder="Type: Add 500 shopping...">
-                <button onclick="sendMessage()">Send</button>
+                <div class="minimal-card" style="margin-top: 14px;">
+                    <h3 style="margin-top:0;">Next Month Prediction</h3>
+                    <p class="muted" style="margin-bottom:0;">Expected expense: <strong>&#8377; {{ predicted_expense }}</strong></p>
+                </div>
+
+                <div class="minimal-card" style="margin-top: 14px;">
+                    <h3 style="margin-top:0;">AI Insights</h3>
+                    {% if insights %}
+                        <ul>
+                            {% for tip in insights %}
+                                <li>{{ tip }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="muted">No insights available yet.</p>
+                    {% endif %}
+                </div>
+
+                <div class="minimal-card" style="margin-top: 14px;">
+                    <h3 style="margin-top:0;">Category Breakdown</h3>
+                    <canvas id="expenseChart"></canvas>
+                </div>
             </div>
-        </div>
 
-        <!-- HISTORY TAB -->
-        <div id="history" class="tab-content">
-            <h2>Expense History</h2>
+            <div id="add" class="tab-content">
+                <div class="form-card">
+                    <h3 style="margin-top:0;">Add Expense</h3>
+                    <form method="POST" action="/add" class="stack">
+                        <input type="text" name="name" placeholder="Expense name" required>
+                        <select name="manual_category">
+                            <option value="">Auto Detect</option>
+                            <option value="Food">Food</option>
+                            <option value="Shopping">Shopping</option>
+                            <option value="Bills">Bills</option>
+                            <option value="Travel">Travel</option>
+                        </select>
+                        <input type="number" name="amount" placeholder="Amount" required>
+                        <button type="submit">Add Expense</button>
+                    </form>
 
-            <table class="expense-table">
-                <tr>
-                    <th>Name</th>
-                    <th>Category</th>
-                    <th>Amount</th>
-                    <th>Action</th>
-                </tr>
+                    <hr>
 
-                {% for e in expenses %}
-                <tr>
-                    <td>{{ e["description"] }}</td>
-                    <td>{{ e["category"] }}</td>
-                    <td>₹{{ e["amount"] }}</td>
-                    <td>
-                        <a class="delete-btn" href="/delete/{{ e['id'] }}">Delete</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </table>
-        </div>
+                    <h3 style="margin-top:0;">Upload Receipt</h3>
+                    <form action="/upload_receipt" method="POST" enctype="multipart/form-data" class="stack">
+                        <input type="file" name="receipt" accept="image/*" required>
+                        <button type="submit">Upload and Auto Add</button>
+                    </form>
 
+                    <hr>
+
+                    <h3 style="margin-top:0;">Smart Expense Assistant</h3>
+                    <form method="POST" action="/chat_add" id="voice-expense-form">
+                        <div class="chat-box">
+                            <div class="bot-message" id="voice-assistant-tip">
+                                Try: <b>Add 200 groceries</b> or <b>I spent 180 on fuel</b>
+                            </div>
+                        </div>
+
+                        <div class="voice-row">
+                            <input type="text" name="message" id="voice-message-input"
+                                placeholder="Type or speak: Add 500 shopping..."
+                                required>
+                            <button type="button" id="voice-mic-btn" class="voice-mic-btn"
+                                    title="Speak expense command" aria-label="Start voice input">
+                                <i class="fas fa-microphone"></i>
+                            </button>
+                        </div>
+
+                        <p id="voice-status" class="voice-status">Voice: ready</p>
+                        <button type="submit" style="margin-top: 8px;">Send</button>
+                    </form>
+                </div>
+            </div>
+
+            <div id="history" class="tab-content">
+                <div class="minimal-card">
+                    <h3 style="margin-top:0;">Expense History</h3>
+                    {% if expenses %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Description</th>
+                                <th>Category</th>
+                                <th>Amount</th>
+                                <th>Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for expense in expenses %}
+                            <tr>
+                                <td>{{ expense.description }}</td>
+                                <td>{{ expense.category }}</td>
+                                <td>&#8377; {{ expense.amount }}</td>
+                                <td>{{ expense.expense_date }}</td>
+                                <td><a href="/delete/{{ expense.id }}">Delete</a></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="muted">No expenses added yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </main>
     </div>
 </div>
 
-<!-- TAB SCRIPT -->
 <script>
 function openTab(evt, tabId) {
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    evt.currentTarget.classList.add('active');
+    document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".sidebar-nav .nav-btn").forEach(b => b.classList.remove("active"));
+    document.getElementById(tabId).classList.add("active");
+    evt.currentTarget.classList.add("active");
 }
 </script>
 
 <script type="application/json" id="chart-data">
-    {{ category_totals | tojson }}
+{{ category_totals | tojson }}
 </script>
 
-<!-- CHART SCRIPT -->
 <script>
 document.addEventListener("DOMContentLoaded", function() {
-
     const chartElement = document.getElementById("expenseChart");
     if (!chartElement) return;
 
     const rawData = document.getElementById("chart-data").textContent;
     const chartData = JSON.parse(rawData);
-
     if (!chartData || Object.keys(chartData).length === 0) return;
 
     new Chart(chartElement, {
-        type: "doughnut",
+        type: "bar",
         data: {
             labels: Object.keys(chartData),
             datasets: [{
-                data: Object.values(chartData)
+                label: "Amount",
+                data: Object.values(chartData),
+                backgroundColor: "#374151",
+                borderRadius: 6
             }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                }
+            }
         }
     });
-
 });
 </script>
 
-<!-- TOGGLE THEME SCRIPT -->
 <script>
+function applyTheme() {
+    const currentTheme = localStorage.getItem("theme");
+    if (currentTheme === "dark") {
+        document.body.classList.add("dark-mode");
+    } else {
+        document.body.classList.remove("dark-mode");
+    }
+}
+
 function toggleTheme() {
     document.body.classList.toggle("dark-mode");
-
-    if (document.body.classList.contains("dark-mode")) {
-        localStorage.setItem("theme", "dark");
-    } else {
-        localStorage.setItem("theme", "light");
-    }
+    const isDark = document.body.classList.contains("dark-mode");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
 }
 
-window.onload = function() {
-    if (localStorage.getItem("theme") === "dark") {
-        document.body.classList.add("dark-mode");
+document.addEventListener("DOMContentLoaded", function() {
+    applyTheme();
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const input = document.getElementById("voice-message-input");
+    const micBtn = document.getElementById("voice-mic-btn");
+    const status = document.getElementById("voice-status");
+    const form = document.getElementById("voice-expense-form");
+
+    if (!input || !micBtn || !status || !form) return;
+
+    if (!SpeechRecognition) {
+        status.textContent = "Voice: not supported in this browser";
+        micBtn.disabled = true;
+        micBtn.classList.add("disabled");
+        return;
     }
-}
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    let listening = false;
+
+    function setListeningState(isListening) {
+        listening = isListening;
+        micBtn.classList.toggle("listening", isListening);
+        status.textContent = isListening ? "Voice: listening..." : "Voice: ready";
+    }
+
+    micBtn.addEventListener("click", function() {
+        if (listening) {
+            recognition.stop();
+            return;
+        }
+        recognition.start();
+    });
+
+    recognition.onstart = function() {
+        setListeningState(true);
+    };
+
+    recognition.onend = function() {
+        setListeningState(false);
+    };
+
+    recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript.trim();
+        if (!transcript) return;
+        input.value = transcript;
+        status.textContent = `Voice heard: "${transcript}"`;
+
+        const normalized = transcript.toLowerCase();
+        if (
+            normalized.startsWith("add ") ||
+            normalized.startsWith("spent ") ||
+            normalized.startsWith("i spent ") ||
+            normalized.startsWith("pay ") ||
+            normalized.startsWith("paid ")
+        ) {
+            form.submit();
+        }
+    };
+
+    recognition.onerror = function(event) {
+        status.textContent = `Voice error: ${event.error}`;
+        setListeningState(false);
+    };
+});
 </script>
 
 </body>

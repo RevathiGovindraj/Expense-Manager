@@ -1,22 +1,113 @@
-from flask import Flask, render_template, request, redirect, session, send_file
+from flask import Flask, render_template, request, redirect, session
 from modules.ai_engine import detect_category
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timedelta
+from datetime import datetime
 import sqlite3
 import os
-from expense_predictor import predict_next_month_expense
+import re
 import pytesseract
 from PIL import Image
-import re
-import os
-
-# Tell pytesseract where Tesseract is installed
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+from expense_predictor import predict_next_month_expense
+from modules.ai_engine import train_model
 
 app = Flask(__name__)
 app.secret_key = "secret123"
 
 DATABASE = "database.db"
+
+
+def parse_expense_message(message):
+    message = message.strip().lower()
+    if not message:
+        return None, None
+
+    patterns = [
+        r"^add\s+(\d+(?:\.\d+)?)\s+(.+)$",
+        r"^spent\s+(\d+(?:\.\d+)?)\s+on\s+(.+)$",
+        r"^i\s+spent\s+(\d+(?:\.\d+)?)\s+on\s+(.+)$",
+        r"^pay(?:ed)?\s+(\d+(?:\.\d+)?)\s+for\s+(.+)$",
+    ]
+
+    for pattern in patterns:
+        match = re.match(pattern, message)
+        if match:
+            amount = float(match.group(1))
+            description = match.group(2).strip()
+            description = re.sub(r"^(on|for)\s+", "", description).strip()
+            if description:
+                return amount, description
+
+    # Fallback: first number is amount, remaining words become description.
+    amount_match = re.search(r"\d+(?:\.\d+)?", message)
+    if not amount_match:
+        return None, None
+
+    amount = float(amount_match.group())
+    before = message[:amount_match.start()].strip()
+    after = message[amount_match.end():].strip()
+    description = f"{before} {after}".strip()
+
+    # Trim filler words common in voice commands.
+    description = re.sub(r"^(add|spent|i spent|pay|paid|on|for)\s+", "", description).strip()
+    if not description:
+        return None, None
+
+    return amount, description
+
+
+def extract_receipt_amount(text):
+    if not text:
+        return 0.0
+
+    cleaned = text.lower()
+    # Remove common date/time patterns that pollute numeric extraction.
+    cleaned = re.sub(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", " ", cleaned)
+    cleaned = re.sub(r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b", " ", cleaned)
+    cleaned = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", " ", cleaned)
+
+    amount_pattern = re.compile(r"(?<!\d)(\d+(?:,\d{3})*(?:\.\d{1,2})?)(?!\d)")
+    priority_keywords = [
+        "grand total", "total amount", "net amount", "amount due", "payable", "total"
+    ]
+    low_priority_keywords = ["qty", "quantity", "item", "invoice no", "bill no", "gstin", "phone"]
+
+    candidates = []
+
+    for line in cleaned.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        nums = amount_pattern.findall(line)
+        if not nums:
+            continue
+
+        line_score = 0
+        if any(k in line for k in priority_keywords):
+            line_score += 3
+        if any(k in line for k in low_priority_keywords):
+            line_score -= 2
+
+        for raw in nums:
+            try:
+                value = float(raw.replace(",", ""))
+            except ValueError:
+                continue
+
+            if value <= 0 or value > 100000:
+                continue
+
+            score = line_score
+            if "." in raw:
+                score += 1
+            candidates.append((score, value))
+
+    if not candidates:
+        return 0.0
+
+    # Pick best-scored candidate; if tie, choose larger value.
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return candidates[0][1]
 
 
 # ---------------------------
@@ -35,7 +126,6 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
-    # Users table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +135,6 @@ def init_db():
     )
     """)
 
-    # Expenses table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,19 +148,9 @@ def init_db():
     )
     """)
 
-    # Budgets table  ✅ NEW
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS budgets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        month TEXT,
-        amount REAL,
-        FOREIGN KEY(user_id) REFERENCES users(id)
-    )
-    """)
-
     conn.commit()
     conn.close()
+
 
 # ---------------------------
 # HOME
@@ -94,7 +173,6 @@ def login():
 
         conn = get_db()
         cursor = conn.cursor()
-
         cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
         user = cursor.fetchone()
         conn.close()
@@ -108,6 +186,9 @@ def login():
     return render_template("login.html", error=error)
 
 
+# ---------------------------
+# SIGNUP
+# ---------------------------
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
@@ -132,6 +213,7 @@ def signup():
 
     return render_template("signup.html")
 
+
 # ---------------------------
 # DASHBOARD
 # ---------------------------
@@ -140,109 +222,26 @@ def dashboard():
     if "user_id" not in session:
         return redirect("/login")
 
+    predicted_expense = predict_next_month_expense(session["user_id"])
+
     conn = get_db()
     cursor = conn.cursor()
 
-    # ===============================
-    # Monthly Summary
-    # ===============================
-
-    current_month = datetime.now().strftime("%Y-%m")
-
     cursor.execute("""
-        SELECT SUM(amount) as total
-        FROM expenses
-        WHERE user_id = ?
-        AND strftime('%Y-%m', expense_date) = ?
-    """, (session["user_id"], current_month))
-
-    row = cursor.fetchone()
-    month_total = row["total"] if row["total"] else 0
-
-    last_month_date = datetime.now().replace(day=1) - timedelta(days=1)
-    last_month = last_month_date.strftime("%Y-%m")
-
-    cursor.execute("""
-        SELECT SUM(amount) as total
-        FROM expenses
-        WHERE user_id = ?
-        AND strftime('%Y-%m', expense_date) = ?
-    """, (session["user_id"], last_month))
-
-    last_row = cursor.fetchone()
-    last_month_total = last_row["total"] if last_row["total"] else 0
-
-    if last_month_total > 0:
-        percent_change = ((month_total - last_month_total) / last_month_total) * 100
-    else:
-        percent_change = 0
-
-    # ===============================
-    # Budget
-    # ===============================
-
-    cursor.execute("""
-        SELECT amount FROM budgets
-        WHERE user_id = ? AND month = ?
-    """, (session["user_id"], current_month))
-
-    budget_row = cursor.fetchone()
-    budget = budget_row["amount"] if budget_row else 0
-
-    if budget > 0:
-        budget_percent = (month_total / budget) * 100
-    else:
-        budget_percent = 0
-
-    # ===============================
-    # Expenses + Filtering
-    # ===============================
-
-    selected_month = request.args.get("month")
-    search = request.args.get("search")
-    selected_category = request.args.get("category")
-    sort = request.args.get("sort")
-
-    query = """
         SELECT id, description, category, amount, expense_date
         FROM expenses
         WHERE user_id = ?
-    """
+        ORDER BY created_at DESC
+    """, (session["user_id"],))
 
-    params = [session["user_id"]]
-
-    if selected_month:
-        query += " AND strftime('%Y-%m', expense_date) = ?"
-        params.append(selected_month)
-
-    if search:
-        query += " AND description LIKE ?"
-        params.append(f"%{search}%")
-
-    if selected_category:
-        query += " AND category = ?"
-        params.append(selected_category)
-
-    if sort == "high":
-        query += " ORDER BY amount DESC"
-    elif sort == "low":
-        query += " ORDER BY amount ASC"
-    else:
-        query += " ORDER BY created_at DESC"
-
-    cursor.execute(query, params)
     expenses = cursor.fetchall()
-
-    total = sum([row["amount"] for row in expenses])
 
     category_totals = {}
     for row in expenses:
         cat = row["category"]
         category_totals[cat] = category_totals.get(cat, 0) + row["amount"]
 
-    # ===============================
-    # Monthly Trend Data
-    # ===============================
+    total = sum([row["amount"] for row in expenses])
 
     cursor.execute("""
         SELECT strftime('%Y-%m', expense_date) as month,
@@ -254,28 +253,8 @@ def dashboard():
     """, (session["user_id"],))
 
     trend_data = cursor.fetchall()
-
     months = [row["month"] for row in trend_data]
     month_totals = [row["total"] for row in trend_data]
-
-    # ===============================
-    # AI Insights
-    # ===============================
-
-    insights = []
-    if category_totals:
-        top_category = max(category_totals, key=category_totals.get)
-        insights.append(f"You spend most on {top_category}.")
-
-    if percent_change > 0:
-        insights.append("Spending increased compared to last month.")
-    elif percent_change < 0:
-        insights.append("Spending decreased compared to last month.")
-
-    if budget_percent >= 100:
-        insights.append("You have exceeded your budget!")
-    elif budget_percent >= 80:
-        insights.append("Warning: You have used more than 80% of your budget.")
 
     conn.close()
 
@@ -283,16 +262,19 @@ def dashboard():
         "dashboard.html",
         expenses=expenses,
         total=total,
-        category_totals=category_totals,
-        month_total=month_total,
-        last_month_total=last_month_total,
-        percent_change=round(percent_change, 2),
-        budget=budget,
-        budget_percent=round(budget_percent, 2),
-        insights=insights,
         months=months,
-        month_totals=month_totals
+        month_totals=month_totals,
+        predicted_expense=predicted_expense,
+        category_totals=category_totals,
+        month_total=0,
+        last_month_total=0,
+        percent_change=0,
+        budget=0,
+        budget_percent=0,
+        insights=[]
     )
+
+
 # ---------------------------
 # ADD EXPENSE
 # ---------------------------
@@ -302,7 +284,7 @@ def add():
         return redirect("/login")
 
     description = request.form.get("name")
-    category = detect_category(description)
+    manual_category = request.form.get("manual_category")
     amount = request.form.get("amount")
 
     if not description or not amount:
@@ -313,23 +295,13 @@ def add():
     except:
         return redirect("/dashboard")
 
+    if manual_category:
+        category = manual_category
+    else:
+        category = detect_category(description)
+
     conn = get_db()
     cursor = conn.cursor()
-
-    # Duplicate detection
-    cursor.execute("""
-        SELECT * FROM expenses
-        WHERE user_id = ?
-        AND description = ?
-        AND amount = ?
-        AND DATE(created_at) = DATE('now')
-    """, (session["user_id"], description, amount))
-
-    duplicate = cursor.fetchone()
-
-    if duplicate:
-        conn.close()
-        return "⚠️ Duplicate expense detected!"
 
     cursor.execute("""
         INSERT INTO expenses (user_id, description, category, amount)
@@ -339,6 +311,7 @@ def add():
     conn.commit()
     conn.close()
 
+    train_model()
     return redirect("/dashboard")
 
 
@@ -346,63 +319,76 @@ def add():
 # DELETE EXPENSE
 # ---------------------------
 @app.route("/delete/<int:id>")
-def delete(id):
+def delete_expense(id):
     if "user_id" not in session:
         return redirect("/login")
 
     conn = get_db()
     cursor = conn.cursor()
-
     cursor.execute("DELETE FROM expenses WHERE id = ?", (id,))
     conn.commit()
     conn.close()
 
+    train_model()
     return redirect("/dashboard")
 
+
 # ---------------------------
-# SET BUDGET
+# EDIT EXPENSE
 # ---------------------------
-@app.route("/set_budget", methods=["POST"])
-def set_budget():
+@app.route("/edit/<int:id>", methods=["POST"])
+def edit_expense(id):
     if "user_id" not in session:
         return redirect("/login")
 
-    amount = request.form.get("budget")
-
-    try:
-        amount = float(amount)
-    except:
-        return redirect("/dashboard")
-
-    current_month = datetime.now().strftime("%Y-%m")
+    description = request.form.get("edit_name")
+    amount = request.form.get("edit_amount")
 
     conn = get_db()
     cursor = conn.cursor()
-
-    # Check if budget already exists
     cursor.execute("""
-        SELECT * FROM budgets
-        WHERE user_id = ? AND month = ?
-    """, (session["user_id"], current_month))
-
-    existing = cursor.fetchone()
-
-    if existing:
-        cursor.execute("""
-            UPDATE budgets
-            SET amount = ?
-            WHERE user_id = ? AND month = ?
-        """, (amount, session["user_id"], current_month))
-    else:
-        cursor.execute("""
-            INSERT INTO budgets (user_id, month, amount)
-            VALUES (?, ?, ?)
-        """, (session["user_id"], current_month, amount))
-
+        UPDATE expenses
+        SET description = ?, amount = ?
+        WHERE id = ?
+    """, (description, amount, id))
     conn.commit()
     conn.close()
 
+    train_model()
     return redirect("/dashboard")
+
+
+# ---------------------------
+# UPLOAD RECEIPT
+# ---------------------------
+@app.route("/upload_receipt", methods=["POST"])
+def upload_receipt():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    file = request.files["receipt"]
+    os.makedirs("uploads", exist_ok=True)
+    filepath = os.path.join("uploads", file.filename)
+    file.save(filepath)
+
+    text = pytesseract.image_to_string(Image.open(filepath))
+    amount = extract_receipt_amount(text)
+
+    category = detect_category("receipt")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO expenses (user_id, description, category, amount)
+        VALUES (?, ?, ?, ?)
+    """, (session["user_id"], "Scanned Receipt", category, amount))
+    conn.commit()
+    conn.close()
+
+    train_model()
+    return redirect("/dashboard")
+
+
 # ---------------------------
 # LOGOUT
 # ---------------------------
@@ -410,28 +396,22 @@ def set_budget():
 def logout():
     session.clear()
     return redirect("/login")
-
+# ---------------------------
+# SMART CHAT ADD
+# ---------------------------
 @app.route("/chat_add", methods=["POST"])
 def chat_add():
     if "user_id" not in session:
-        return "Login required"
+        return redirect("/login")
 
     message = request.form.get("message", "").strip().lower()
 
     if not message:
-        return "Please enter a message"
+        return redirect("/dashboard")
 
-    parts = message.split()
-
-    if len(parts) < 3 or parts[0] != "add":
-        return "Format: Add <amount> <description>"
-
-    try:
-        amount = float(parts[1])
-    except:
-        return "Amount must be a number"
-
-    description = " ".join(parts[2:])
+    amount, description = parse_expense_message(message)
+    if amount is None or not description:
+        return redirect("/dashboard")
     category = detect_category(description)
 
     conn = get_db()
@@ -445,127 +425,12 @@ def chat_add():
     conn.commit()
     conn.close()
 
-    return f"✅ Added ₹{amount} under {category}"
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase import pdfmetrics
-
-@app.route("/download_pdf")
-def download_pdf():
-    if "user_id" not in session:
-        return redirect("/login")
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT description, category, amount, expense_date
-        FROM expenses
-        WHERE user_id = ?
-        ORDER BY expense_date DESC
-    """, (session["user_id"],))
-
-    expenses = cursor.fetchall()
-    conn.close()
-
-    filename = "expense_report.pdf"
-    doc = SimpleDocTemplate(filename)
-    pdfmetrics.registerFont(TTFont("DejaVuSans", "DejaVuSans.ttf"))
-    elements = []
-
-    styles = getSampleStyleSheet()
-    elements.append(Paragraph("<b>Expense Report</b>", styles["Title"]))
-    elements.append(Spacer(1, 0.5 * inch))
-
-    # Table Data
-    data = [["Date", "Description", "Category", "Amount"]]
-
-    total_amount = 0
-
-    for e in expenses:
-        data.append([
-            str(e["expense_date"]),
-            e["description"],
-            e["category"],
-            f"₹{e['amount']}"
-        ])
-        total_amount += e["amount"]
-
-    # Add total row
-    data.append(["", "", "Total", f"₹{total_amount}"])
-
-    table = Table(data, colWidths=[1.2*inch, 1.8*inch, 1.2*inch, 1*inch])
-
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.grey),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.whitesmoke),
-        ("GRID", (0,0), (-1,-1), 1, colors.black),
-        ("FONTNAME", (0,0), (-1,-1), "DejaVuSans"),
-        ("FONTSIZE", (0,0), (-1,-1), 10),
-        ("ALIGN", (3,1), (3,-1), "RIGHT"),
-        ("BACKGROUND", (0,-1), (-1,-1), colors.lightgrey)
-    ]))
-
-    elements.append(table)
-
-    doc.build(elements)
-
-    return send_file(filename, as_attachment=True)
-
-@app.route("/upload_receipt", methods=["POST"])
-def upload_receipt():
-    if "receipt" not in request.files:
-        return redirect("/dashboard")
-
-    file = request.files["receipt"]
-
-    if file.filename == "":
-        return redirect("/dashboard")
-
-    filepath = os.path.join("uploads", file.filename)
-    file.save(filepath)
-
-    # Extract text from image
-    text = pytesseract.image_to_string(Image.open(filepath))
-
-    # Find amount using regex
-    amounts = re.findall(r"\d+\.\d+|\d+", text)
-
-    amount = 0
-    if amounts:
-        amount = max([float(a) for a in amounts])
-
-    # Guess category
-    text_lower = text.lower()
-
-    if any(word in text_lower for word in ["restaurant", "food", "cafe", "dine"]):
-        category = "Food"
-    elif any(word in text_lower for word in ["mall", "shopping", "store"]):
-        category = "Shopping"
-    elif any(word in text_lower for word in ["uber", "ola", "taxi", "bus"]):
-        category = "Transport"
-    else:
-        category = "Other"
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT INTO expenses (description, amount, category, user_id) VALUES (?, ?, ?, ?)",
-        ("Receipt Expense", amount, category, session["user_id"])
-    )
-
-    conn.commit()
-    conn.close()
+    # retrain model
+    from modules.ai_engine import train_model
+    train_model()
 
     return redirect("/dashboard")
 
-# ---------------------------
-# RUN
-# ---------------------------
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
