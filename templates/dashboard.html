@@ -9,46 +9,60 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-<div class="shell">
-    <div class="topbar">
-        <h1 class="brand">Expense Tracker</h1>
-        <div class="topbar-actions">
-            <button type="button" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Theme</button>
-            <a href="/logout"><button type="button">Logout</button></a>
+<div class="app-shell">
+    <aside class="app-sidebar">
+        <div class="sidebar-brand">
+            <h1>Expense Tracker</h1>
+            <p>Smart personal finance</p>
         </div>
-    </div>
 
-    <div class="dashboard-layout">
-        <aside class="sidebar-nav">
+        <nav class="sidebar-nav">
             <button class="nav-btn active" onclick="openTab(event, 'dashboard')">
-                <i class="fas fa-chart-line"></i> Overview
+                <i class="fas fa-chart-line"></i><span>Overview</span>
             </button>
             <button class="nav-btn" onclick="openTab(event, 'add')">
-                <i class="fas fa-plus-circle"></i> Add Expense
+                <i class="fas fa-plus-circle"></i><span>Add Expense</span>
+            </button>
+            <button class="nav-btn" onclick="openTab(event, 'personal-transactions')">
+                <i class="fas fa-user-group"></i><span>Personal Transaction</span>
             </button>
             <button class="nav-btn" onclick="openTab(event, 'history')">
-                <i class="fas fa-clock-rotate-left"></i> History
+                <i class="fas fa-clock-rotate-left"></i><span>History</span>
             </button>
-        </aside>
+        </nav>
 
-        <main class="content-panel">
+        <div class="sidebar-footer">
+            <p class="muted">Track daily spending and improve saving habits.</p>
+        </div>
+    </aside>
+
+    <main class="app-main">
+        <div class="topbar">
+            <h2 class="brand">Dashboard</h2>
+            <div class="topbar-actions">
+                <button type="button" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Theme</button>
+                <a href="/logout"><button type="button">Logout</button></a>
+            </div>
+        </div>
+
+        <section class="content-panel">
             <div id="dashboard" class="tab-content active">
                 <div class="cards">
                     <div class="card">
                         <h3>Total Expense</h3>
-                        <p>&#8377; {{ total }}</p>
+                        <p>&#8377; {{ total_expense }}</p>
                     </div>
                     <div class="card">
-                        <h3>This Month</h3>
-                        <p>&#8377; {{ month_total }}</p>
+                        <h3>Total Amount Received</h3>
+                        <p>&#8377; {{ total_received }}</p>
                     </div>
                     <div class="card">
-                        <h3>Last Month</h3>
-                        <p>&#8377; {{ last_month_total }}</p>
+                        <h3>Total Sent</h3>
+                        <p>&#8377; {{ total_sent }}</p>
                     </div>
                     <div class="card">
-                        <h3>Change</h3>
-                        <p>{{ percent_change }}%</p>
+                        <h3>Net Flow</h3>
+                        <p>&#8377; {{ (total_received - total_sent) | round(2) }}</p>
                     </div>
                 </div>
 
@@ -126,6 +140,97 @@
                 </div>
             </div>
 
+            <div id="personal-transactions" class="tab-content">
+                <div class="form-card">
+                    <h3 style="margin-top:0;">Add Personal Transaction</h3>
+                    <form method="POST" action="/add_personal_transaction" class="stack">
+                        <input type="text" name="person_name" placeholder="Person name" required>
+                        <input type="text" name="description" placeholder="Description (e.g. Lunch split)" required>
+                        <input type="number" name="amount" placeholder="Amount" step="0.01" required>
+                        <select name="status" required>
+                            <option value="Send">Send</option>
+                            <option value="Received">Received</option>
+                        </select>
+                        <button type="submit">Save Transaction</button>
+                    </form>
+
+                    <hr>
+
+                    <h3 style="margin-top:0;">Upload Payment Screenshot</h3>
+                    <form method="POST" action="/upload_personal_transaction" enctype="multipart/form-data" class="stack">
+                        <input type="file" name="payment_screenshot" accept="image/*" required>
+                        <p class="muted" style="margin:0;">
+                            Auto-detects status using payment text:
+                            <b>To = Send</b>, <b>From = Received</b>.
+                        </p>
+                        <button type="submit">Upload and Auto Add</button>
+                    </form>
+                </div>
+
+                <div class="minimal-card" style="margin-top: 14px;">
+                    <h3 style="margin-top:0;">Transaction Filters</h3>
+                    <div class="overview-filters">
+                        <select id="pt-filter-date">
+                            <option value="this_month">This month</option>
+                            <option value="last_30">Last 30 days</option>
+                            <option value="last_90">Last 90 days</option>
+                            <option value="all">All time</option>
+                        </select>
+                        <select id="pt-filter-type">
+                            <option value="all">Payment type: All</option>
+                            <option value="send">Money sent</option>
+                            <option value="received">Money received</option>
+                        </select>
+                        <select id="pt-filter-amount">
+                            <option value="all">Amount: All</option>
+                            <option value="upto_200">Up to ₹200</option>
+                            <option value="200_500">₹200 - ₹500</option>
+                            <option value="500_2000">₹500 - ₹2,000</option>
+                            <option value="above_2000">Above ₹2,000</option>
+                        </select>
+                        <button type="button" id="pt-clear-filters">Clear</button>
+                    </div>
+                </div>
+
+                <div class="minimal-card" style="margin-top: 14px;">
+                    <h3 style="margin-top:0;">One-to-One Transaction History</h3>
+                    {% if personal_transactions %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Person</th>
+                                <th>Description</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pt-history-body">
+                            {% for txn in personal_transactions %}
+                            <tr class="pt-row"
+                                data-date="{{ txn.transaction_date }}"
+                                data-status="{{ txn.status|lower }}"
+                                data-amount="{{ txn.amount }}">
+                                <td>{{ txn.person_name }}</td>
+                                <td>{{ txn.description }}</td>
+                                <td>&#8377; {{ txn.amount }}</td>
+                                <td>
+                                    <span class="status-tag {{ txn.status|lower }}">{{ txn.status }}</span>
+                                </td>
+                                <td>{{ txn.transaction_date }}</td>
+                                <td><a href="/delete_personal_transaction/{{ txn.id }}">Delete</a></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <p id="pt-empty" class="muted" style="display:none; margin-top:10px;">No matching personal transactions.</p>
+                    {% else %}
+                    <p class="muted">No personal transactions added yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+
             <div id="history" class="tab-content">
                 <div class="minimal-card">
                     <h3 style="margin-top:0;">Expense History</h3>
@@ -136,6 +241,7 @@
                                 <th>Description</th>
                                 <th>Category</th>
                                 <th>Amount</th>
+                                <th>Status</th>
                                 <th>Date</th>
                                 <th>Actions</th>
                             </tr>
@@ -146,6 +252,9 @@
                                 <td>{{ expense.description }}</td>
                                 <td>{{ expense.category }}</td>
                                 <td>&#8377; {{ expense.amount }}</td>
+                                <td>
+                                    <span class="status-tag {{ expense.status|lower }}">{{ expense.status }}</span>
+                                </td>
                                 <td>{{ expense.expense_date }}</td>
                                 <td><a href="/delete/{{ expense.id }}">Delete</a></td>
                             </tr>
@@ -157,8 +266,8 @@
                     {% endif %}
                 </div>
             </div>
-        </main>
-    </div>
+        </section>
+    </main>
 </div>
 
 <script>
@@ -178,10 +287,7 @@ function openTab(evt, tabId) {
 document.addEventListener("DOMContentLoaded", function() {
     const chartElement = document.getElementById("expenseChart");
     if (!chartElement) return;
-
-    const rawData = document.getElementById("chart-data").textContent;
-    const chartData = JSON.parse(rawData);
-    if (!chartData || Object.keys(chartData).length === 0) return;
+    const chartData = JSON.parse(document.getElementById("chart-data").textContent || "{}");
 
     new Chart(chartElement, {
         type: "bar",
@@ -198,17 +304,93 @@ document.addEventListener("DOMContentLoaded", function() {
             responsive: true,
             maintainAspectRatio: true,
             scales: {
-                y: {
-                    beginAtZero: true
-                }
+                y: { beginAtZero: true }
             },
             plugins: {
-                legend: {
-                    display: false
-                }
+                legend: { display: false }
             }
         }
     });
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const dateSel = document.getElementById("pt-filter-date");
+    const typeSel = document.getElementById("pt-filter-type");
+    const amountSel = document.getElementById("pt-filter-amount");
+    const clearBtn = document.getElementById("pt-clear-filters");
+    const rows = Array.from(document.querySelectorAll(".pt-row"));
+    const empty = document.getElementById("pt-empty");
+    if (!dateSel || !typeSel || !amountSel || !clearBtn || rows.length === 0) return;
+
+    function parseDate(dateStr) {
+        const d = new Date(dateStr);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    function amountPass(amount, f) {
+        if (f === "upto_200") return amount <= 200;
+        if (f === "200_500") return amount > 200 && amount <= 500;
+        if (f === "500_2000") return amount > 500 && amount <= 2000;
+        if (f === "above_2000") return amount > 2000;
+        return true;
+    }
+
+    function datePass(dateObj, f) {
+        if (!dateObj) return false;
+        const now = new Date();
+        const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (f === "this_month") {
+            return dateObj.getFullYear() === now.getFullYear() && dateObj.getMonth() === now.getMonth();
+        }
+        if (f === "last_30") {
+            const cutoff = new Date(startToday);
+            cutoff.setDate(cutoff.getDate() - 30);
+            return dateObj >= cutoff;
+        }
+        if (f === "last_90") {
+            const cutoff = new Date(startToday);
+            cutoff.setDate(cutoff.getDate() - 90);
+            return dateObj >= cutoff;
+        }
+        return true;
+    }
+
+    function applyPTFilters() {
+        const dateF = dateSel.value;
+        const typeF = typeSel.value;
+        const amountF = amountSel.value;
+        let visibleCount = 0;
+
+        rows.forEach(row => {
+            const status = String(row.dataset.status || "").toLowerCase();
+            const amount = Number(row.dataset.amount || 0);
+            const d = parseDate(row.dataset.date);
+
+            let ok = true;
+            if (typeF !== "all" && status !== typeF) ok = false;
+            if (!amountPass(amount, amountF)) ok = false;
+            if (!datePass(d, dateF)) ok = false;
+
+            row.style.display = ok ? "" : "none";
+            if (ok) visibleCount += 1;
+        });
+
+        if (empty) empty.style.display = visibleCount === 0 ? "" : "none";
+    }
+
+    dateSel.addEventListener("change", applyPTFilters);
+    typeSel.addEventListener("change", applyPTFilters);
+    amountSel.addEventListener("change", applyPTFilters);
+    clearBtn.addEventListener("click", function() {
+        dateSel.value = "this_month";
+        typeSel.value = "all";
+        amountSel.value = "all";
+        applyPTFilters();
+    });
+
+    applyPTFilters();
 });
 </script>
 
