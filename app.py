@@ -1,10 +1,16 @@
-from flask import Flask, render_template, request, redirect, session
+from flask import Flask, render_template, request, redirect, session, flash, send_from_directory
 from modules.ai_engine import detect_category
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta
+import calendar
 import sqlite3
 import os
 import re
+import secrets
+import smtplib
+import ssl
+from email.message import EmailMessage
 import pytesseract
 from PIL import Image
 from expense_predictor import predict_next_month_expense
@@ -14,6 +20,13 @@ app = Flask(__name__)
 app.secret_key = "secret123"
 
 DATABASE = "database.db"
+PROFILE_UPLOAD_DIR = os.path.join("uploads", "profile")
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() != "0"
 
 
 def parse_expense_message(message):
@@ -236,6 +249,99 @@ def extract_personal_payment_details(text):
     return person_name, description, amount, status
 
 
+def parse_iso_date(value):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def add_months(base_date, months):
+    month_index = (base_date.month - 1) + months
+    year = base_date.year + month_index // 12
+    month = (month_index % 12) + 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(base_date.day, last_day)
+    return base_date.replace(year=year, month=month, day=day)
+
+
+def advance_due_date(current_due, frequency):
+    freq = str(frequency or "monthly").lower()
+    if freq == "weekly":
+        return current_due + timedelta(days=7)
+    if freq == "yearly":
+        return add_months(current_due, 12)
+    return add_months(current_due, 1)
+
+
+def reminder_meta(next_due_date, reminder_days):
+    today = datetime.now().date()
+    days_left = (next_due_date - today).days
+    if days_left < 0:
+        return "overdue", days_left
+    if days_left == 0:
+        return "due_today", days_left
+    if days_left <= reminder_days:
+        return "upcoming", days_left
+    return "normal", days_left
+
+
+def mask_email(email):
+    if not email or "@" not in email:
+        return "your email"
+    name, domain = email.split("@", 1)
+    if len(name) <= 2:
+        masked_name = name[0] + "*"
+    else:
+        masked_name = name[0] + ("*" * (len(name) - 2)) + name[-1]
+    return f"{masked_name}@{domain}"
+
+
+def clear_password_otp_session():
+    session.pop("pwd_reset_otp_hash", None)
+    session.pop("pwd_reset_new_hash", None)
+    session.pop("pwd_reset_expires_at", None)
+
+
+def send_otp_email(recipient_email, otp_code):
+    if not SMTP_HOST or not SMTP_PORT or not SMTP_USER or not SMTP_PASS or not SMTP_FROM:
+        return False, "SMTP not configured"
+
+    msg = EmailMessage()
+    msg["Subject"] = "FinTrack Pro Password Reset OTP"
+    msg["From"] = SMTP_FROM
+    msg["To"] = recipient_email
+    msg.set_content(
+        f"Your FinTrack Pro OTP is: {otp_code}\n\n"
+        "This OTP expires in 10 minutes.\n"
+        "If you did not request this, ignore this email."
+    )
+
+    try:
+        if SMTP_USE_TLS:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15, context=ssl.create_default_context()) as server:
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+    except Exception as exc:
+        return False, str(exc)
+
+    return True, ""
+
+
+def ensure_recurring_last_paid_column(cursor):
+    cursor.execute("PRAGMA table_info(recurring_expenses)")
+    recurring_columns = [row[1] for row in cursor.fetchall()]
+    if "last_paid_date" not in recurring_columns:
+        cursor.execute("ALTER TABLE recurring_expenses ADD COLUMN last_paid_date DATE")
+
+
 # ---------------------------
 # DATABASE CONNECTION
 # ---------------------------
@@ -257,7 +363,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL
+        password TEXT NOT NULL,
+        profile_photo TEXT DEFAULT ''
     )
     """)
 
@@ -289,11 +396,61 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS recurring_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'Bills',
+        amount REAL NOT NULL,
+        frequency TEXT NOT NULL DEFAULT 'monthly',
+        start_date DATE NOT NULL,
+        next_due_date DATE NOT NULL,
+        last_paid_date DATE,
+        reminder_days INTEGER NOT NULL DEFAULT 3,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        notes TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS budgets (
+        user_id INTEGER PRIMARY KEY,
+        monthly_budget REAL NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+
+    # Backward-compatible migration for older budgets schemas.
+    cursor.execute("PRAGMA table_info(budgets)")
+    budget_cols = [row[1] for row in cursor.fetchall()]
+    if "monthly_budget" not in budget_cols:
+        cursor.execute("ALTER TABLE budgets ADD COLUMN monthly_budget REAL NOT NULL DEFAULT 0")
+        if "budget" in budget_cols:
+            cursor.execute("""
+                UPDATE budgets
+                SET monthly_budget = COALESCE(monthly_budget, budget, 0)
+            """)
+    if "updated_at" not in budget_cols:
+        cursor.execute("ALTER TABLE budgets ADD COLUMN updated_at TIMESTAMP")
+
+    # Ensure old databases have the status column.
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = [row[1] for row in cursor.fetchall()]
+    if "profile_photo" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN profile_photo TEXT DEFAULT ''")
+
     # Ensure old databases have the status column.
     cursor.execute("PRAGMA table_info(expenses)")
     expense_columns = [row[1] for row in cursor.fetchall()]
     if "status" not in expense_columns:
         cursor.execute("ALTER TABLE expenses ADD COLUMN status TEXT DEFAULT 'Send'")
+
+    # Ensure old recurring schema has last_paid_date.
+    ensure_recurring_last_paid_column(cursor)
 
     conn.commit()
     conn.close()
@@ -305,6 +462,11 @@ def init_db():
 @app.route("/")
 def home():
     return render_template("index.html")
+
+
+@app.route("/profile_photo/<path:filename>")
+def profile_photo(filename):
+    return send_from_directory(PROFILE_UPLOAD_DIR, filename)
 
 
 # ---------------------------
@@ -371,8 +533,22 @@ def dashboard():
 
     predicted_expense = predict_next_month_expense(session["user_id"])
 
+    otp_pending = False
+    otp_expiry = session.get("pwd_reset_expires_at")
+    if session.get("pwd_reset_otp_hash") and otp_expiry:
+        expiry_date = parse_iso_date(otp_expiry.split("T")[0])
+        if expiry_date and expiry_date < datetime.now().date():
+            clear_password_otp_session()
+        else:
+            try:
+                otp_pending = datetime.fromisoformat(otp_expiry) > datetime.now()
+            except Exception:
+                clear_password_otp_session()
+
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("SELECT id, name, email, profile_photo FROM users WHERE id = ?", (session["user_id"],))
+    user_profile = cursor.fetchone()
 
     cursor.execute("""
         SELECT id, description, category, amount, status, expense_date
@@ -391,6 +567,16 @@ def dashboard():
     """, (session["user_id"],))
 
     personal_transactions = cursor.fetchall()
+
+    cursor.execute("""
+        SELECT id, title, category, amount, frequency, start_date, next_due_date, last_paid_date,
+               reminder_days, is_active, notes
+        FROM recurring_expenses
+        WHERE user_id = ?
+        ORDER BY next_due_date ASC
+    """, (session["user_id"],))
+
+    recurring_expenses = cursor.fetchall()
 
     category_totals = {}
     for row in expenses:
@@ -411,6 +597,15 @@ def dashboard():
     trend_data = cursor.fetchall()
     months = [row["month"] for row in trend_data]
     month_totals = [row["total"] for row in trend_data]
+
+    cursor.execute("PRAGMA table_info(budgets)")
+    budget_cols = [row[1] for row in cursor.fetchall()]
+    budget_column = "monthly_budget" if "monthly_budget" in budget_cols else ("budget" if "budget" in budget_cols else None)
+    monthly_budget = 0.0
+    if budget_column:
+        cursor.execute(f"SELECT {budget_column} AS budget_value FROM budgets WHERE user_id = ?", (session["user_id"],))
+        budget_row = cursor.fetchone()
+        monthly_budget = float(budget_row["budget_value"]) if budget_row and budget_row["budget_value"] is not None else 0.0
 
     conn.close()
 
@@ -452,6 +647,10 @@ def dashboard():
             total_received += amount
         else:
             total_sent += amount
+
+    budget_percent = 0.0
+    if monthly_budget > 0:
+        budget_percent = round((this_month_total / monthly_budget) * 100, 2)
     for row in personal_transactions:
         status = str(row["status"]).lower()
         amount = float(row["amount"])
@@ -459,6 +658,39 @@ def dashboard():
             total_received += amount
         else:
             total_sent += amount
+
+    lifetime_spending = round(total_sent, 2)
+    total_transactions = len(expenses) + len(personal_transactions)
+    active_recurring_count = sum(1 for rec in recurring_expenses if int(rec["is_active"]) == 1)
+
+    monthly_send_totals = {}
+    for row in expenses:
+        if str(row["status"]).lower() != "send":
+            continue
+        d = parse_date_safe(row["expense_date"])
+        if not d:
+            continue
+        key = d.strftime("%Y-%m")
+        monthly_send_totals[key] = monthly_send_totals.get(key, 0.0) + float(row["amount"])
+
+    for row in personal_transactions:
+        if str(row["status"]).lower() != "send":
+            continue
+        d = parse_date_safe(row["transaction_date"])
+        if not d:
+            continue
+        key = d.strftime("%Y-%m")
+        monthly_send_totals[key] = monthly_send_totals.get(key, 0.0) + float(row["amount"])
+
+    avg_monthly_spend = round(
+        (sum(monthly_send_totals.values()) / len(monthly_send_totals)) if monthly_send_totals else 0.0,
+        2,
+    )
+
+    top_category_name = "-"
+    top_category_value = 0.0
+    if category_totals:
+        top_category_name, top_category_value = max(category_totals.items(), key=lambda kv: kv[1])
 
     expenses_json = [
         {
@@ -482,10 +714,66 @@ def dashboard():
         for row in personal_transactions
     ]
 
+    recurring_alerts = []
+    for rec in recurring_expenses:
+        if int(rec["is_active"]) != 1:
+            continue
+        next_due = parse_iso_date(rec["next_due_date"])
+        if not next_due:
+            continue
+        status_key, days_left = reminder_meta(next_due, int(rec["reminder_days"]))
+        if status_key in {"overdue", "due_today", "upcoming"}:
+            recurring_alerts.append({
+                "id": rec["id"],
+                "title": rec["title"],
+                "amount": float(rec["amount"]),
+                "next_due_date": rec["next_due_date"],
+                "status_key": status_key,
+                "days_left": days_left,
+            })
+
+    insights = []
+    if monthly_budget > 0:
+        if this_month_total > monthly_budget:
+            over_by = round(this_month_total - monthly_budget, 2)
+            insights.append(f"Budget exceeded by ₹{over_by} this month.")
+        elif budget_percent >= 80:
+            insights.append(f"You have used {budget_percent}% of this month's budget.")
+        else:
+            insights.append(f"Budget usage is {budget_percent}% this month.")
+
+    if percent_change > 0:
+        insights.append(f"Spending is up {percent_change}% compared to last month.")
+    elif percent_change < 0:
+        insights.append(f"Spending is down {abs(percent_change)}% compared to last month.")
+
+    if category_totals:
+        top_cat = max(category_totals.items(), key=lambda kv: kv[1])
+        insights.append(f"Top spending category: {top_cat[0]} (₹{round(top_cat[1], 2)}).")
+
+    if recurring_alerts:
+        insights.append(f"You have {len(recurring_alerts)} recurring payment reminder(s).")
+
+    try:
+        predicted_value = float(predicted_expense)
+    except Exception:
+        predicted_value = 0.0
+
+    if monthly_budget > 0 and predicted_value > monthly_budget:
+        diff = round(predicted_value - monthly_budget, 2)
+        insights.append(f"Next month prediction is ₹{diff} above your budget.")
+
+    if not insights:
+        insights.append("Add more transactions to generate richer insights.")
+
     return render_template(
         "dashboard.html",
+        user_profile=user_profile,
+        otp_pending=otp_pending,
         expenses=expenses,
         personal_transactions=personal_transactions,
+        recurring_expenses=recurring_expenses,
+        recurring_alerts=recurring_alerts,
         total=total,
         months=months,
         month_totals=month_totals,
@@ -497,11 +785,17 @@ def dashboard():
         month_total=round(this_month_total, 2),
         last_month_total=round(last_month_total, 2),
         percent_change=percent_change,
-        budget=0,
-        budget_percent=0,
-        insights=[],
+        budget=monthly_budget,
+        budget_percent=budget_percent,
+        insights=insights,
         expenses_json=expenses_json,
         personal_json=personal_json,
+        lifetime_spending=lifetime_spending,
+        total_transactions=total_transactions,
+        active_recurring_count=active_recurring_count,
+        avg_monthly_spend=avg_monthly_spend,
+        top_category_name=top_category_name,
+        top_category_value=round(top_category_value, 2),
     )
 
 
@@ -685,6 +979,9 @@ def add_personal_transaction():
 
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("SELECT id, name, email, profile_photo FROM users WHERE id = ?", (session["user_id"],))
+    user_profile = cursor.fetchone()
+    ensure_recurring_last_paid_column(cursor)
     cursor.execute("""
         INSERT INTO personal_transactions (user_id, person_name, description, amount, status)
         VALUES (?, ?, ?, ?, ?)
@@ -735,6 +1032,381 @@ def delete_personal_transaction(id):
     cursor = conn.cursor()
     cursor.execute("""
         DELETE FROM personal_transactions
+        WHERE id = ? AND user_id = ?
+    """, (id, session["user_id"]))
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
+
+
+@app.route("/add_recurring_expense", methods=["POST"])
+def add_recurring_expense():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    title = request.form.get("title", "").strip()
+    category = request.form.get("category", "Bills").strip() or "Bills"
+    amount = request.form.get("amount")
+    frequency = request.form.get("frequency", "monthly").strip().lower()
+    start_date_raw = request.form.get("start_date", "").strip()
+    reminder_days_raw = request.form.get("reminder_days", "3").strip()
+    notes = request.form.get("notes", "").strip()
+
+    if not title or not amount or not start_date_raw:
+        return redirect("/dashboard")
+
+    if frequency not in {"weekly", "monthly", "yearly"}:
+        frequency = "monthly"
+
+    try:
+        amount = float(amount)
+    except Exception:
+        return redirect("/dashboard")
+
+    start_date = parse_iso_date(start_date_raw)
+    if not start_date:
+        return redirect("/dashboard")
+
+    try:
+        reminder_days = int(reminder_days_raw)
+    except Exception:
+        reminder_days = 3
+    reminder_days = max(0, min(reminder_days, 30))
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO recurring_expenses
+        (user_id, title, category, amount, frequency, start_date, next_due_date, reminder_days, is_active, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    """, (session["user_id"], title, category, amount, frequency, start_date.isoformat(), start_date.isoformat(), reminder_days, notes))
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
+
+
+@app.route("/mark_recurring_paid/<int:id>", methods=["POST"])
+def mark_recurring_paid(id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    ensure_recurring_last_paid_column(cursor)
+    cursor.execute("""
+        SELECT id, title, category, amount, frequency, next_due_date, is_active
+        FROM recurring_expenses
+        WHERE id = ? AND user_id = ?
+    """, (id, session["user_id"]))
+    rec = cursor.fetchone()
+
+    if not rec or int(rec["is_active"]) != 1:
+        conn.close()
+        flash("Recurring expense is inactive or not found.", "error")
+        return redirect("/dashboard")
+
+    due_date = parse_iso_date(rec["next_due_date"]) or datetime.now().date()
+    next_due = advance_due_date(due_date, rec["frequency"])
+
+    cursor.execute("""
+        INSERT INTO expenses (user_id, description, category, amount, status, expense_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (session["user_id"], f"{rec['title']} (Recurring)", rec["category"], float(rec["amount"]), "Send", datetime.now().date().isoformat()))
+
+    cursor.execute("""
+        UPDATE recurring_expenses
+        SET next_due_date = ?, last_paid_date = ?
+        WHERE id = ? AND user_id = ?
+    """, (next_due.isoformat(), datetime.now().date().isoformat(), id, session["user_id"]))
+
+    conn.commit()
+    conn.close()
+
+    train_model()
+    flash(f"Marked paid for '{rec['title']}'. Next due: {next_due.isoformat()}", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/set_budget", methods=["POST"])
+def set_budget():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    budget_value = request.form.get("budget")
+    if not budget_value:
+        return redirect("/dashboard")
+
+    try:
+        monthly_budget = float(budget_value)
+    except Exception:
+        return redirect("/dashboard")
+
+    if monthly_budget < 0:
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(budgets)")
+    budget_cols = [row[1] for row in cursor.fetchall()]
+
+    if "monthly_budget" not in budget_cols:
+        cursor.execute("ALTER TABLE budgets ADD COLUMN monthly_budget REAL NOT NULL DEFAULT 0")
+    if "updated_at" not in budget_cols:
+        cursor.execute("ALTER TABLE budgets ADD COLUMN updated_at TIMESTAMP")
+
+    # Use update-then-insert for compatibility with older schemas
+    # that may not have a UNIQUE/PRIMARY constraint on user_id.
+    cursor.execute("""
+        UPDATE budgets
+        SET monthly_budget = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    """, (monthly_budget, session["user_id"]))
+
+    if cursor.rowcount == 0:
+        cursor.execute("""
+            INSERT INTO budgets (user_id, monthly_budget, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        """, (session["user_id"], monthly_budget))
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
+
+
+@app.route("/update_profile", methods=["POST"])
+def update_profile():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip()
+    if not name or not email:
+        flash("Name and email are required.", "error")
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE users
+            SET name = ?, email = ?
+            WHERE id = ?
+        """, (name, email, session["user_id"]))
+        conn.commit()
+        flash("Profile updated successfully.", "success")
+    except Exception:
+        flash("Could not update profile. Email may already be in use.", "error")
+    finally:
+        conn.close()
+
+    return redirect("/dashboard")
+
+
+@app.route("/change_password", methods=["POST"])
+def change_password():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    current_password = request.form.get("current_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    if not current_password or not new_password or not confirm_password:
+        flash("All password fields are required.", "error")
+        return redirect("/dashboard")
+
+    if new_password != confirm_password:
+        flash("New password and confirm password do not match.", "error")
+        return redirect("/dashboard")
+
+    if len(new_password) < 6:
+        flash("New password must be at least 6 characters.", "error")
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT password FROM users WHERE id = ?", (session["user_id"],))
+    user = cursor.fetchone()
+    if not user or not check_password_hash(user["password"], current_password):
+        conn.close()
+        flash("Current password is incorrect.", "error")
+        return redirect("/dashboard")
+
+    cursor.execute("""
+        UPDATE users
+        SET password = ?
+        WHERE id = ?
+    """, (generate_password_hash(new_password), session["user_id"]))
+    conn.commit()
+    conn.close()
+    flash("Password changed successfully.", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/request_password_otp", methods=["POST"])
+def request_password_otp():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    if not new_password or not confirm_password:
+        flash("New password and confirm password are required.", "error")
+        return redirect("/dashboard")
+
+    if new_password != confirm_password:
+        flash("New password and confirm password do not match.", "error")
+        return redirect("/dashboard")
+
+    if len(new_password) < 6:
+        flash("New password must be at least 6 characters.", "error")
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT email FROM users WHERE id = ?", (session["user_id"],))
+    user = cursor.fetchone()
+    conn.close()
+
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    session["pwd_reset_otp_hash"] = generate_password_hash(otp)
+    session["pwd_reset_new_hash"] = generate_password_hash(new_password)
+    session["pwd_reset_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
+
+    recipient_email = user["email"] if user else ""
+    destination = mask_email(recipient_email)
+    sent, reason = send_otp_email(recipient_email, otp)
+    if sent:
+        flash(f"OTP sent to {destination}. Check your inbox.", "success")
+    else:
+        # Dev fallback so flow still works if SMTP is not configured.
+        flash(f"Email OTP could not be sent ({reason}). Demo OTP: {otp}", "error")
+    return redirect("/dashboard")
+
+
+@app.route("/verify_password_otp", methods=["POST"])
+def verify_password_otp():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    otp = request.form.get("otp", "").strip()
+    otp_hash = session.get("pwd_reset_otp_hash")
+    new_password_hash = session.get("pwd_reset_new_hash")
+    expiry_raw = session.get("pwd_reset_expires_at")
+
+    if not otp_hash or not new_password_hash or not expiry_raw:
+        flash("No active OTP request. Generate OTP first.", "error")
+        return redirect("/dashboard")
+
+    try:
+        expiry = datetime.fromisoformat(expiry_raw)
+    except Exception:
+        clear_password_otp_session()
+        flash("OTP session invalid. Please generate a new OTP.", "error")
+        return redirect("/dashboard")
+
+    if datetime.now() > expiry:
+        clear_password_otp_session()
+        flash("OTP expired. Please generate a new OTP.", "error")
+        return redirect("/dashboard")
+
+    if not check_password_hash(otp_hash, otp):
+        flash("Invalid OTP. Please try again.", "error")
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET password = ?
+        WHERE id = ?
+    """, (new_password_hash, session["user_id"]))
+    conn.commit()
+    conn.close()
+
+    clear_password_otp_session()
+    flash("Password updated successfully with OTP verification.", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/cancel_password_otp", methods=["POST"])
+def cancel_password_otp():
+    if "user_id" not in session:
+        return redirect("/login")
+    clear_password_otp_session()
+    flash("OTP request cleared.", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/upload_profile_photo", methods=["POST"])
+def upload_profile_photo():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    file = request.files.get("profile_photo")
+    if not file or not file.filename:
+        flash("Please choose an image file.", "error")
+        return redirect("/dashboard")
+
+    filename = secure_filename(file.filename)
+    if not filename:
+        flash("Invalid filename.", "error")
+        return redirect("/dashboard")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        flash("Only JPG, PNG, or WEBP images are allowed.", "error")
+        return redirect("/dashboard")
+
+    os.makedirs(PROFILE_UPLOAD_DIR, exist_ok=True)
+    stored_name = f"user_{session['user_id']}_{int(datetime.now().timestamp())}{ext}"
+    filepath = os.path.join(PROFILE_UPLOAD_DIR, stored_name)
+    file.save(filepath)
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET profile_photo = ?
+        WHERE id = ?
+    """, (stored_name, session["user_id"]))
+    conn.commit()
+    conn.close()
+
+    flash("Profile photo updated.", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/toggle_recurring_expense/<int:id>", methods=["POST"])
+def toggle_recurring_expense(id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE recurring_expenses
+        SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END
+        WHERE id = ? AND user_id = ?
+    """, (id, session["user_id"]))
+    conn.commit()
+    conn.close()
+
+    return redirect("/dashboard")
+
+
+@app.route("/delete_recurring_expense/<int:id>")
+def delete_recurring_expense(id):
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM recurring_expenses
         WHERE id = ? AND user_id = ?
     """, (id, session["user_id"]))
     conn.commit()

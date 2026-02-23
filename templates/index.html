@@ -3,17 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Expense Tracker</title>
+  <title>FinTrack Pro</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <meta http-equiv="refresh" content="3;url=/login">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
-<body>
-  <div class="center-screen">
-    <div class="auth-card splash">
-      <h1>Expense Tracker</h1>
-      <p>Minimal personal expense tracking</p>
-      <p class="muted">Redirecting to login...</p>
-    </div>
+<body class="auth-page">
+  <div class="landing-page">
+    <header class="landing-nav">
+      <a href="/" class="landing-brand">
+        <span class="landing-brand-icon"><i class="fas fa-wallet"></i></span>
+        <span>FinTrack Pro</span>
+      </a>
+    </header>
+
+    <main class="landing-hero">
+      <div class="landing-badge">Personal Finance Assistant</div>
+      <h1 class="landing-title">Manage Your Money With <span>Clarity.</span></h1>
+      <p class="landing-subtitle">Track expenses, sent and received payments, and personal transactions in one beautiful dashboard.</p>
+      <div class="landing-cta">
+        <a href="/login" class="landing-btn">Start Tracking <i class="fas fa-arrow-right"></i></a>
+        <a href="/signup" class="landing-link">Create Account</a>
+      </div>
+    </main>
   </div>
 </body>
 </html>

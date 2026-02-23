@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap");
+
 * {
     box-sizing: border-box;
 }
@@ -20,12 +22,53 @@
 
 body {
     margin: 0;
-    font-family: "Segoe UI", Tahoma, sans-serif;
+    font-family: "Sora", "Segoe UI", Tahoma, sans-serif;
     color: var(--text);
     background:
         radial-gradient(1000px 540px at 6% -20%, #cae7ff, transparent 70%),
         radial-gradient(820px 500px at 100% 0%, #ffe1c2, transparent 65%),
         linear-gradient(135deg, var(--bg), var(--bg-2));
+}
+
+body::before,
+body::after {
+    content: "";
+    position: fixed;
+    z-index: -1;
+    border-radius: 999px;
+    filter: blur(60px);
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+body::before {
+    width: 380px;
+    height: 380px;
+    top: -100px;
+    left: -60px;
+    background: #7dd3fc;
+    animation: floatBlobA 9s ease-in-out infinite;
+}
+
+body::after {
+    width: 420px;
+    height: 420px;
+    right: -120px;
+    bottom: -120px;
+    background: #f9a8d4;
+    animation: floatBlobB 11s ease-in-out infinite;
+}
+
+@keyframes floatBlobA {
+    0% { transform: translate(0, 0); }
+    50% { transform: translate(24px, 18px); }
+    100% { transform: translate(0, 0); }
+}
+
+@keyframes floatBlobB {
+    0% { transform: translate(0, 0); }
+    50% { transform: translate(-26px, -14px); }
+    100% { transform: translate(0, 0); }
 }
 
 body.dark-mode {
@@ -99,8 +142,12 @@ button:hover {
     padding: 28px;
     border-radius: 16px;
     border: 1px solid var(--line);
-    background: var(--surface);
+    background: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(243, 247, 255, 0.94));
     box-shadow: var(--shadow);
+}
+
+body.dark-mode .auth-card {
+    background: linear-gradient(155deg, rgba(18, 33, 59, 0.95), rgba(14, 24, 43, 0.94));
 }
 
 .auth-title {
@@ -111,6 +158,15 @@ button:hover {
 .auth-subtitle {
     margin: 0 0 20px;
     color: var(--muted);
+}
+
+.auth-kicker {
+    margin: 0 0 8px;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
 }
 
 .error-box {
@@ -125,6 +181,14 @@ button:hover {
 .stack {
     display: grid;
     gap: 12px;
+}
+
+.field-block label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
 }
 
 .muted {
@@ -351,6 +415,55 @@ button:hover {
     color: var(--muted);
 }
 
+.profile-top {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
+.profile-avatar {
+    width: 88px;
+    height: 88px;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 2px solid var(--line);
+    background: var(--surface-2);
+}
+
+.profile-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 28px;
+}
+
+.inline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.section-subtitle {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.ghost-btn {
+    background: transparent;
+    color: var(--primary);
+    border: 1px solid var(--line);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hidden-btn {
+    display: none !important;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -394,6 +507,26 @@ td a {
     background: rgba(34, 197, 94, 0.16);
     border-color: rgba(34, 197, 94, 0.35);
     color: #166534;
+}
+
+.flash-msg {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.flash-msg.success {
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    color: #166534;
+}
+
+.flash-msg.error {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #991b1b;
 }
 
 body.dark-mode .status-tag.send {
@@ -469,5 +602,313 @@ canvas {
 
     .overview-filters {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Landing + Login Enhancements */
+.landing-card {
+    width: 100%;
+    max-width: 760px;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 255, 0.93));
+    box-shadow: var(--shadow);
+    padding: 34px;
+    text-align: center;
+}
+
+body.dark-mode .landing-card {
+    background: linear-gradient(145deg, rgba(18, 33, 59, 0.95), rgba(14, 24, 43, 0.9));
+}
+
+.landing-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.14);
+    color: var(--primary);
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.landing-title {
+    margin: 14px 0 10px;
+    font-size: 54px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+
+.landing-subtitle {
+    margin: 0 auto;
+    max-width: 580px;
+    color: var(--muted);
+    font-size: 17px;
+}
+
+.landing-pills {
+    margin-top: 18px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.landing-pills span {
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.landing-metrics {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.landing-metrics div {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px 8px;
+    background: var(--surface-2);
+}
+
+.landing-metrics strong {
+    display: block;
+    font-size: 20px;
+}
+
+.landing-metrics span {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.login-shell {
+    width: 100%;
+    max-width: 940px;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(243, 247, 255, 0.9));
+}
+
+body.dark-mode .login-shell {
+    background: linear-gradient(145deg, rgba(18, 33, 59, 0.95), rgba(14, 24, 43, 0.9));
+}
+
+.login-visual {
+    padding: 34px;
+    background:
+        radial-gradient(420px 220px at 15% 10%, rgba(59, 130, 246, 0.28), transparent 70%),
+        radial-gradient(360px 200px at 90% 90%, rgba(249, 115, 22, 0.24), transparent 70%),
+        linear-gradient(145deg, rgba(14, 165, 233, 0.14), rgba(37, 99, 235, 0.08));
+}
+
+.auth-brand-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 14px;
+}
+
+.login-visual h2 {
+    margin: 0 0 10px;
+    font-size: 36px;
+}
+
+.login-visual p {
+    margin: 0 0 16px;
+    color: var(--muted);
+}
+
+.login-visual ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text);
+}
+
+.login-visual li {
+    margin-bottom: 8px;
+}
+
+.login-card-enhanced {
+    border: none;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: blur(10px);
+}
+
+@media (max-width: 900px) {
+    .login-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .login-card-enhanced {
+        border-left: none;
+        border-top: 1px solid var(--line);
+    }
+}
+
+@media (max-width: 680px) {
+    .landing-title {
+        font-size: 40px;
+    }
+
+    .login-visual h2 {
+        font-size: 30px;
+    }
+
+    .landing-metrics {
+        grid-template-columns: 1fr;
+    }
+
+    .profile-top {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+/* Index Hero (button-first) */
+.landing-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 26px 34px;
+}
+
+.landing-nav {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.landing-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 800;
+    font-size: 34px;
+    letter-spacing: -0.01em;
+}
+
+.landing-brand-icon {
+    width: 52px;
+    height: 52px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: linear-gradient(145deg, rgba(14, 165, 233, 0.2), rgba(37, 99, 235, 0.22));
+    color: #0e7490;
+    font-size: 24px;
+}
+
+body.dark-mode .landing-brand-icon {
+    color: #67e8f9;
+}
+
+.landing-hero {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.landing-hero .landing-title {
+    margin: 14px 0;
+    max-width: 800px;
+}
+
+.landing-hero .landing-title span {
+    color: #0ea5e9;
+}
+
+.landing-hero .landing-subtitle {
+    max-width: 760px;
+    font-size: 34px;
+    line-height: 1.3;
+}
+
+.landing-cta {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.landing-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 26px;
+    border-radius: 999px;
+    text-decoration: none;
+    color: #fff;
+    font-weight: 700;
+    background: linear-gradient(120deg, #0e7490, #0ea5e9);
+    box-shadow: 0 12px 28px rgba(14, 116, 144, 0.26);
+}
+
+.landing-btn:hover {
+    filter: brightness(1.06);
+}
+
+.landing-link {
+    color: var(--muted);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+@media (max-width: 900px) {
+    .landing-brand {
+        font-size: 28px;
+    }
+
+    .landing-hero .landing-subtitle {
+        font-size: 26px;
+    }
+}
+
+@media (max-width: 680px) {
+    .landing-page {
+        padding: 18px;
+    }
+
+    .landing-brand {
+        font-size: 23px;
+    }
+
+    .landing-brand-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+    }
+
+    .landing-hero .landing-title {
+        font-size: 40px;
+    }
+
+    .landing-hero .landing-subtitle {
+        font-size: 20px;
     }
 }
