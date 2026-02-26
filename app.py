@@ -956,6 +956,60 @@ def chat_add():
     return redirect("/dashboard")
 
 
+@app.route("/upload_voice_command", methods=["POST"])
+def upload_voice_command():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    file = request.files.get("voice_audio")
+    if not file or not file.filename:
+        flash("No voice recording received.", "error")
+        return redirect("/dashboard")
+
+    os.makedirs("uploads", exist_ok=True)
+    filename = secure_filename(file.filename) or f"voice_{int(datetime.now().timestamp())}.wav"
+    filepath = os.path.join("uploads", filename)
+    file.save(filepath)
+
+    try:
+        import speech_recognition as sr
+    except Exception:
+        flash("Voice transcription dependency missing. Install: pip install SpeechRecognition", "error")
+        return redirect("/dashboard")
+
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(filepath) as source:
+            audio = recognizer.record(source)
+        message = recognizer.recognize_google(audio).strip().lower()
+    except sr.UnknownValueError:
+        flash("Could not understand the recorded voice.", "error")
+        return redirect("/dashboard")
+    except Exception:
+        flash("Voice transcription failed. Please try again.", "error")
+        return redirect("/dashboard")
+
+    amount, description = parse_expense_message(message)
+    if amount is None or not description:
+        flash(f"Voice command not recognized as expense: \"{message}\"", "error")
+        return redirect("/dashboard")
+
+    category = detect_category(description)
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO expenses (user_id, description, category, amount, status)
+        VALUES (?, ?, ?, ?, ?)
+    """, (session["user_id"], description, category, amount, "Send"))
+    conn.commit()
+    conn.close()
+
+    train_model()
+    flash(f"Added from recording: {description} - ₹{amount}", "success")
+    return redirect("/dashboard")
+
+
 @app.route("/add_personal_transaction", methods=["POST"])
 def add_personal_transaction():
     if "user_id" not in session:
@@ -1416,4 +1470,4 @@ def delete_recurring_expense(id):
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

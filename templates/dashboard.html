@@ -10,7 +10,7 @@
 </head>
 <body>
 <div class="app-shell">
-    <aside class="app-sidebar">
+    <aside class="app-sidebar" id="app-sidebar">
         <div class="sidebar-brand">
             <h1>FinTrack Pro</h1>
             <p>Personal finance workspace</p>
@@ -46,6 +46,9 @@
         <div class="topbar">
             <h2 class="brand">Dashboard</h2>
             <div class="topbar-actions">
+                <button type="button" class="mobile-sidebar-toggle" onclick="toggleSidebar()">
+                    <i class="fas fa-bars"></i>
+                </button>
                 <button type="button" id="theme-toggle-btn" onclick="toggleTheme()">Toggle Theme</button>
                 <a href="/logout"><button type="button">Logout</button></a>
             </div>
@@ -216,6 +219,24 @@
                         <p id="voice-status" class="voice-status">Voice: ready</p>
                         <button type="submit" style="margin-top: 8px;">Send</button>
                     </form>
+
+                    <hr>
+
+                    <h3 style="margin-top:0;">Mobile Voice Fallback (Record & Upload)</h3>
+                    <p class="muted" style="margin: 0 0 10px;">
+                        Use this when mic icon speech recognition is blocked on phone browsers.
+                    </p>
+                    <div class="voice-upload-row">
+                        <button type="button" id="record-audio-btn">
+                            <i class="fas fa-circle"></i>
+                            Start Recording
+                        </button>
+                        <button type="button" id="upload-audio-btn" disabled>
+                            <i class="fas fa-upload"></i>
+                            Upload Voice
+                        </button>
+                    </div>
+                    <p id="voice-upload-status" class="voice-status">Recorder: idle</p>
                 </div>
             </div>
 
@@ -525,21 +546,54 @@
     </main>
 </div>
 
+<nav class="mobile-bottom-nav">
+    <button class="mobile-nav-btn active" onclick="openTab(event, 'dashboard')">
+        <i class="fas fa-chart-line"></i>
+        <span>Dashboard</span>
+    </button>
+    <button class="mobile-nav-btn" onclick="openTab(event, 'add')">
+        <i class="fas fa-plus-circle"></i>
+        <span>Expenses</span>
+    </button>
+    <button class="mobile-nav-btn" onclick="openTab(event, 'personal-transactions')">
+        <i class="fas fa-user-group"></i>
+        <span>P2P</span>
+    </button>
+    <button class="mobile-nav-btn" onclick="openTab(event, 'history')">
+        <i class="fas fa-clock-rotate-left"></i>
+        <span>Records</span>
+    </button>
+</nav>
+
 <script>
 function activateTab(tabId) {
     document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
     document.querySelectorAll(".sidebar-nav .nav-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".mobile-bottom-nav .mobile-nav-btn").forEach(b => b.classList.remove("active"));
     const target = document.getElementById(tabId);
     if (!target) return;
     target.classList.add("active");
 
     const btn = document.querySelector(`.sidebar-nav .nav-btn[onclick*="'${tabId}'"]`);
     if (btn) btn.classList.add("active");
+
+    const mobileBtn = document.querySelector(`.mobile-bottom-nav .mobile-nav-btn[onclick*="'${tabId}'"]`);
+    if (mobileBtn) mobileBtn.classList.add("active");
 }
 
 function openTab(evt, tabId) {
     activateTab(tabId);
     localStorage.setItem("active_dashboard_tab", tabId);
+    if (window.innerWidth <= 900) {
+        const sidebar = document.getElementById("app-sidebar");
+        if (sidebar) sidebar.classList.remove("open");
+    }
+}
+
+function toggleSidebar() {
+    const sidebar = document.getElementById("app-sidebar");
+    if (!sidebar) return;
+    sidebar.classList.toggle("open");
 }
 </script>
 
@@ -697,6 +751,169 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 
 <script>
+document.addEventListener("DOMContentLoaded", function() {
+    const recordBtn = document.getElementById("record-audio-btn");
+    const uploadBtn = document.getElementById("upload-audio-btn");
+    const status = document.getElementById("voice-upload-status");
+    if (!recordBtn || !uploadBtn || !status) return;
+
+    const mediaDevices = navigator.mediaDevices;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!mediaDevices || !AudioCtx) {
+        status.textContent = "Recorder: not supported on this browser";
+        recordBtn.disabled = true;
+        uploadBtn.disabled = true;
+        return;
+    }
+
+    let audioContext = null;
+    let mediaStream = null;
+    let sourceNode = null;
+    let processorNode = null;
+    let isRecording = false;
+    let pcmChunks = [];
+    let wavBlob = null;
+    let sampleRate = 44100;
+
+    function mergeFloat32(chunks) {
+        let length = 0;
+        for (const c of chunks) length += c.length;
+        const merged = new Float32Array(length);
+        let offset = 0;
+        for (const c of chunks) {
+            merged.set(c, offset);
+            offset += c.length;
+        }
+        return merged;
+    }
+
+    function floatTo16BitPCM(view, offset, input) {
+        for (let i = 0; i < input.length; i++, offset += 2) {
+            const s = Math.max(-1, Math.min(1, input[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+    }
+
+    function writeString(view, offset, str) {
+        for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+        }
+    }
+
+    function encodeWav(samples, rate) {
+        const buffer = new ArrayBuffer(44 + samples.length * 2);
+        const view = new DataView(buffer);
+
+        writeString(view, 0, "RIFF");
+        view.setUint32(4, 36 + samples.length * 2, true);
+        writeString(view, 8, "WAVE");
+        writeString(view, 12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, rate, true);
+        view.setUint32(28, rate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeString(view, 36, "data");
+        view.setUint32(40, samples.length * 2, true);
+        floatTo16BitPCM(view, 44, samples);
+
+        return new Blob([view], { type: "audio/wav" });
+    }
+
+    async function startRecording() {
+        pcmChunks = [];
+        wavBlob = null;
+        uploadBtn.disabled = true;
+        status.textContent = "Recorder: requesting microphone...";
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioCtx();
+        sampleRate = audioContext.sampleRate || 44100;
+        sourceNode = audioContext.createMediaStreamSource(mediaStream);
+        processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+
+        processorNode.onaudioprocess = function(e) {
+            if (!isRecording) return;
+            const data = e.inputBuffer.getChannelData(0);
+            pcmChunks.push(new Float32Array(data));
+        };
+
+        sourceNode.connect(processorNode);
+        processorNode.connect(audioContext.destination);
+        isRecording = true;
+        recordBtn.innerHTML = '<i class="fas fa-stop"></i> Stop Recording';
+        status.textContent = "Recorder: recording... tap again to stop";
+    }
+
+    async function stopRecording() {
+        isRecording = false;
+        recordBtn.innerHTML = '<i class="fas fa-circle"></i> Start Recording';
+
+        if (processorNode) {
+            processorNode.disconnect();
+            processorNode.onaudioprocess = null;
+        }
+        if (sourceNode) sourceNode.disconnect();
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+        }
+        if (audioContext && audioContext.state !== "closed") {
+            await audioContext.close();
+        }
+
+        const merged = mergeFloat32(pcmChunks);
+        if (!merged.length) {
+            status.textContent = "Recorder: no audio captured";
+            return;
+        }
+        wavBlob = encodeWav(merged, sampleRate);
+        uploadBtn.disabled = false;
+        status.textContent = "Recorder: recording ready to upload";
+    }
+
+    recordBtn.addEventListener("click", async function() {
+        try {
+            if (!isRecording) {
+                await startRecording();
+            } else {
+                await stopRecording();
+            }
+        } catch (err) {
+            status.textContent = "Recorder error: microphone permission blocked";
+            isRecording = false;
+            recordBtn.innerHTML = '<i class="fas fa-circle"></i> Start Recording';
+        }
+    });
+
+    uploadBtn.addEventListener("click", async function() {
+        if (!wavBlob) return;
+        uploadBtn.disabled = true;
+        status.textContent = "Recorder: uploading and transcribing...";
+
+        const formData = new FormData();
+        formData.append("voice_audio", wavBlob, "voice_command.wav");
+
+        try {
+            const response = await fetch("/upload_voice_command", {
+                method: "POST",
+                body: formData,
+            });
+            if (response.redirected) {
+                window.location.href = response.url;
+                return;
+            }
+            window.location.href = "/dashboard";
+        } catch (err) {
+            status.textContent = "Recorder: upload failed. Please try again.";
+            uploadBtn.disabled = false;
+        }
+    });
+});
+</script>
+
+<script>
 function applyTheme() {
     const currentTheme = localStorage.getItem("theme");
     if (currentTheme === "dark") {
@@ -738,29 +955,49 @@ document.addEventListener("DOMContentLoaded", function() {
     recognition.lang = "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
+    recognition.maxAlternatives = 1;
 
     let listening = false;
+    let manualStop = false;
 
     function setListeningState(isListening) {
         listening = isListening;
         micBtn.classList.toggle("listening", isListening);
-        status.textContent = isListening ? "Voice: listening..." : "Voice: ready";
+        if (isListening) {
+            status.textContent = "Voice: listening... tap mic again to stop";
+        } else {
+            status.textContent = "Voice: ready";
+        }
     }
 
     micBtn.addEventListener("click", function() {
         if (listening) {
-            recognition.stop();
+            manualStop = true;
+            setListeningState(false);
+            try {
+                recognition.stop();
+            } catch (e) {}
             return;
         }
-        recognition.start();
+        manualStop = false;
+        try {
+            recognition.start();
+        } catch (e) {
+            status.textContent = "Voice error: microphone is busy, try again";
+        }
     });
 
     recognition.onstart = function() {
+        manualStop = false;
         setListeningState(true);
     };
 
     recognition.onend = function() {
         setListeningState(false);
+        if (manualStop) {
+            status.textContent = "Voice: stopped";
+            manualStop = false;
+        }
     };
 
     recognition.onresult = function(event) {
@@ -782,7 +1019,14 @@ document.addEventListener("DOMContentLoaded", function() {
     };
 
     recognition.onerror = function(event) {
-        status.textContent = `Voice error: ${event.error}`;
+        const reason = String(event.error || "").toLowerCase();
+        if (reason === "not-allowed" || reason === "service-not-allowed") {
+            status.textContent = "Voice error: mic permission blocked";
+        } else if (reason === "no-speech") {
+            status.textContent = "Voice: no speech detected, try again";
+        } else {
+            status.textContent = `Voice error: ${event.error}`;
+        }
         setListeningState(false);
     };
 });
