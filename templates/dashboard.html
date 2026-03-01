@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dashboard - FinTrack Pro</title>
+    <title>Dashboard - SplitPilot</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -12,7 +12,7 @@
 <div class="app-shell">
     <aside class="app-sidebar" id="app-sidebar">
         <div class="sidebar-brand">
-            <h1>FinTrack Pro</h1>
+            <h1>SplitPilot</h1>
             <p>Personal finance workspace</p>
         </div>
 
@@ -26,14 +26,17 @@
             <button class="nav-btn" onclick="openTab(event, 'personal-transactions')">
                 <i class="fas fa-user-group"></i><span>P2P Transfers</span>
             </button>
+            <button class="nav-btn" onclick="openTab(event, 'payments')">
+                <i class="fas fa-indian-rupee-sign"></i><span>Pay</span>
+            </button>
             <button class="nav-btn" onclick="openTab(event, 'recurring-expenses')">
                 <i class="fas fa-rotate"></i><span>Recurring</span>
             </button>
-            <button class="nav-btn" onclick="openTab(event, 'profile')">
-                <i class="fas fa-user"></i><span>Profile</span>
-            </button>
             <button class="nav-btn" onclick="openTab(event, 'history')">
                 <i class="fas fa-clock-rotate-left"></i><span>Records</span>
+            </button>
+            <button class="nav-btn" onclick="openTab(event, 'profile')">
+                <i class="fas fa-user"></i><span>Profile</span>
             </button>
         </nav>
 
@@ -176,7 +179,7 @@
                 <div class="form-card">
                     <h3 style="margin-top:0;">Add Expense</h3>
                     <form method="POST" action="/add" class="stack">
-                        <input type="text" name="name" placeholder="Expense name" required>
+                        <input type="text" name="name" class="alpha-only" placeholder="Expense name" pattern="[A-Za-z ]+" title="Use alphabets only (spaces allowed)" required>
                         <select name="manual_category">
                             <option value="">Auto Detect</option>
                             <option value="Food">Food</option>
@@ -244,7 +247,7 @@
                 <div class="form-card">
                     <h3 style="margin-top:0;">Add Personal Transaction</h3>
                     <form method="POST" action="/add_personal_transaction" class="stack">
-                        <input type="text" name="person_name" placeholder="Person name" required>
+                        <input type="text" name="person_name" class="alpha-only" placeholder="Person name" pattern="[A-Za-z ]+" title="Use alphabets only (spaces allowed)" required>
                         <input type="text" name="description" placeholder="Description (e.g. Lunch split)" required>
                         <input type="number" name="amount" placeholder="Amount" step="0.01" required>
                         <select name="status" required>
@@ -293,7 +296,14 @@
                 </div>
 
                 <div class="minimal-card" style="margin-top: 14px;">
-                    <h3 style="margin-top:0;">One-to-One Transaction History</h3>
+                    <div class="inline-header">
+                        <h3 style="margin-top:0;">One-to-One Transaction History</h3>
+                        <a href="/export_personal_csv" class="mini-action-link">
+                            <i class="fas fa-file-csv"></i>
+                            Export CSV
+                        </a>
+                    </div>
+                    <input type="text" id="pt-search" class="table-search-input" placeholder="Search person or description...">
                     {% if personal_transactions %}
                     <table>
                         <thead>
@@ -321,7 +331,7 @@
                                     </span>
                                 </td>
                                 <td>{{ txn.transaction_date }}</td>
-                                <td><a href="/delete_personal_transaction/{{ txn.id }}">Delete</a></td>
+                                <td><a href="/delete_personal_transaction/{{ txn.id }}" class="confirm-delete" data-item="personal transaction">Delete</a></td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -333,11 +343,37 @@
                 </div>
             </div>
 
+            <div id="payments" class="tab-content">
+                <div class="form-card">
+                    <h3 style="margin-top:0;">Pay via UPI (Free)</h3>
+                    <div class="stack">
+                        <input type="text" id="upi-id" placeholder="UPI ID (e.g. name@oksbi)">
+                        <input type="text" id="upi-name" class="alpha-only" placeholder="Payee Name (alphabets only)">
+                        <input type="number" id="upi-amount" step="0.01" placeholder="Amount">
+                        <input type="text" id="upi-note" placeholder="Note (optional)">
+                        <div class="voice-upload-row">
+                            <button type="button" id="upi-open-btn">
+                                <i class="fas fa-mobile-screen-button"></i>
+                                Open UPI App
+                            </button>
+                            <button type="button" id="upi-generate-qr-btn">
+                                <i class="fas fa-qrcode"></i>
+                                Generate QR
+                            </button>
+                        </div>
+                        <p id="upi-status" class="voice-status">UPI: enter details and open app (mobile) or generate QR.</p>
+                        <div id="upi-qr-wrap" class="upi-qr-wrap hidden-btn">
+                            <img id="upi-qr-img" alt="UPI QR Code">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="recurring-expenses" class="tab-content">
                 <div class="form-card">
                     <h3 style="margin-top:0;">Add Recurring Expense</h3>
                     <form method="POST" action="/add_recurring_expense" class="stack">
-                        <input type="text" name="title" placeholder="Expense title (e.g. Rent, EMI, Netflix)" required>
+                        <input type="text" name="title" class="alpha-only" placeholder="Expense title (e.g. Rent, EMI, Netflix)" pattern="[A-Za-z ]+" title="Use alphabets only (spaces allowed)" required>
                         <select name="category" required>
                             <option value="Bills">Bills</option>
                             <option value="Food">Food</option>
@@ -397,7 +433,7 @@
                                     <form method="POST" action="/toggle_recurring_expense/{{ rec.id }}" style="display:inline-block; margin-left:6px;">
                                         <button type="submit">{{ "Pause" if rec.is_active == 1 else "Resume" }}</button>
                                     </form>
-                                    <a href="/delete_recurring_expense/{{ rec.id }}" style="margin-left:6px; color:#dc2626;">Delete</a>
+                                    <a href="/delete_recurring_expense/{{ rec.id }}" class="confirm-delete" data-item="recurring expense" style="margin-left:6px; color:#dc2626;">Delete</a>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -507,7 +543,14 @@
 
             <div id="history" class="tab-content">
                 <div class="minimal-card">
-                    <h3 style="margin-top:0;">Expense History</h3>
+                    <div class="inline-header">
+                        <h3 style="margin-top:0;">Expense History</h3>
+                        <a href="/export_expenses_csv" class="mini-action-link">
+                            <i class="fas fa-file-csv"></i>
+                            Export CSV
+                        </a>
+                    </div>
+                    <input type="text" id="records-search" class="table-search-input" placeholder="Search description or category...">
                     {% if expenses %}
                     <table>
                         <thead>
@@ -522,7 +565,7 @@
                         </thead>
                         <tbody>
                             {% for expense in expenses %}
-                            <tr>
+                            <tr class="record-row" data-desc="{{ expense.description|lower }}" data-cat="{{ expense.category|lower }}" data-status="{{ expense.status|lower }}">
                                 <td>{{ expense.description }}</td>
                                 <td>{{ expense.category }}</td>
                                 <td>&#8377; {{ expense.amount }}</td>
@@ -532,11 +575,12 @@
                                     </span>
                                 </td>
                                 <td>{{ expense.expense_date }}</td>
-                                <td><a href="/delete/{{ expense.id }}">Delete</a></td>
+                                <td><a href="/delete/{{ expense.id }}" class="confirm-delete" data-item="expense">Delete</a></td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
+                    <p id="records-empty" class="muted" style="display:none; margin-top:10px;">No matching records found.</p>
                     {% else %}
                     <p class="muted">No expenses added yet.</p>
                     {% endif %}
@@ -564,6 +608,18 @@
         <span>Records</span>
     </button>
 </nav>
+
+<div id="confirm-delete-modal" class="confirm-modal hidden-btn" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+    <div class="confirm-modal-backdrop"></div>
+    <div class="confirm-modal-card">
+        <h4 id="confirm-delete-title">Delete Item?</h4>
+        <p id="confirm-delete-text" class="muted">This action cannot be undone.</p>
+        <div class="confirm-modal-actions">
+            <button type="button" id="confirm-delete-cancel" class="ghost-btn">Cancel</button>
+            <button type="button" id="confirm-delete-yes" class="danger-btn">Delete</button>
+        </div>
+    </div>
+</div>
 
 <script>
 function activateTab(tabId) {
@@ -648,10 +704,11 @@ document.addEventListener("DOMContentLoaded", function() {
     const dateSel = document.getElementById("pt-filter-date");
     const typeSel = document.getElementById("pt-filter-type");
     const amountSel = document.getElementById("pt-filter-amount");
+    const searchInput = document.getElementById("pt-search");
     const clearBtn = document.getElementById("pt-clear-filters");
     const rows = Array.from(document.querySelectorAll(".pt-row"));
     const empty = document.getElementById("pt-empty");
-    if (!dateSel || !typeSel || !amountSel || !clearBtn || rows.length === 0) return;
+    if (!dateSel || !typeSel || !amountSel || !clearBtn || !searchInput || rows.length === 0) return;
 
     function parseDate(dateStr) {
         const d = new Date(dateStr);
@@ -690,17 +747,20 @@ document.addEventListener("DOMContentLoaded", function() {
         const dateF = dateSel.value;
         const typeF = typeSel.value;
         const amountF = amountSel.value;
+        const search = (searchInput.value || "").trim().toLowerCase();
         let visibleCount = 0;
 
         rows.forEach(row => {
             const status = String(row.dataset.status || "").toLowerCase();
             const amount = Number(row.dataset.amount || 0);
             const d = parseDate(row.dataset.date);
+            const rowText = row.innerText.toLowerCase();
 
             let ok = true;
             if (typeF !== "all" && status !== typeF) ok = false;
             if (!amountPass(amount, amountF)) ok = false;
             if (!datePass(d, dateF)) ok = false;
+            if (search && !rowText.includes(search)) ok = false;
 
             row.style.display = ok ? "" : "none";
             if (ok) visibleCount += 1;
@@ -712,14 +772,77 @@ document.addEventListener("DOMContentLoaded", function() {
     dateSel.addEventListener("change", applyPTFilters);
     typeSel.addEventListener("change", applyPTFilters);
     amountSel.addEventListener("change", applyPTFilters);
+    searchInput.addEventListener("input", applyPTFilters);
     clearBtn.addEventListener("click", function() {
         dateSel.value = "this_month";
         typeSel.value = "all";
         amountSel.value = "all";
+        searchInput.value = "";
         applyPTFilters();
     });
 
     applyPTFilters();
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const search = document.getElementById("records-search");
+    const rows = Array.from(document.querySelectorAll(".record-row"));
+    const empty = document.getElementById("records-empty");
+    if (!search || rows.length === 0) return;
+
+    function applyRecordSearch() {
+        const q = (search.value || "").trim().toLowerCase();
+        let count = 0;
+
+        rows.forEach(function(row) {
+            const hay = `${row.dataset.desc || ""} ${row.dataset.cat || ""} ${row.dataset.status || ""}`.toLowerCase();
+            const ok = !q || hay.includes(q);
+            row.style.display = ok ? "" : "none";
+            if (ok) count += 1;
+        });
+
+        if (empty) empty.style.display = count === 0 ? "" : "none";
+    }
+
+    search.addEventListener("input", applyRecordSearch);
+    applyRecordSearch();
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const modal = document.getElementById("confirm-delete-modal");
+    const text = document.getElementById("confirm-delete-text");
+    const cancelBtn = document.getElementById("confirm-delete-cancel");
+    const yesBtn = document.getElementById("confirm-delete-yes");
+    const backdrop = modal ? modal.querySelector(".confirm-modal-backdrop") : null;
+    const links = Array.from(document.querySelectorAll("a.confirm-delete"));
+    if (!modal || !text || !cancelBtn || !yesBtn || !backdrop || links.length === 0) return;
+
+    let targetHref = "";
+
+    function closeModal() {
+        modal.classList.add("hidden-btn");
+        targetHref = "";
+    }
+
+    links.forEach(function(link) {
+        link.addEventListener("click", function(e) {
+            e.preventDefault();
+            targetHref = link.getAttribute("href") || "";
+            const item = link.getAttribute("data-item") || "item";
+            text.textContent = `Are you sure you want to delete this ${item}? This action cannot be undone.`;
+            modal.classList.remove("hidden-btn");
+        });
+    });
+
+    cancelBtn.addEventListener("click", closeModal);
+    backdrop.addEventListener("click", closeModal);
+    yesBtn.addEventListener("click", function() {
+        if (targetHref) window.location.href = targetHref;
+    });
 });
 </script>
 
@@ -931,6 +1054,109 @@ function toggleTheme() {
 
 document.addEventListener("DOMContentLoaded", function() {
     applyTheme();
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const alphaInputs = document.querySelectorAll(".alpha-only");
+    if (!alphaInputs.length) return;
+
+    function sanitizeAlpha(text) {
+        return String(text || "")
+            .replace(/[^A-Za-z\s]/g, "")
+            .replace(/\s{2,}/g, " ");
+    }
+
+    alphaInputs.forEach(function(input) {
+        const error = document.createElement("p");
+        error.className = "inline-input-error";
+        error.textContent = "Only alphabets and spaces are allowed.";
+        input.insertAdjacentElement("afterend", error);
+
+        input.addEventListener("input", function() {
+            const cursor = input.selectionStart;
+            const before = input.value;
+            const cleaned = sanitizeAlpha(before);
+            const hadInvalidChars = cleaned !== before;
+
+            error.classList.toggle("show", hadInvalidChars);
+
+            if (cleaned !== before) {
+                input.value = cleaned;
+                try {
+                    input.setSelectionRange(cursor - 1, cursor - 1);
+                } catch (e) {}
+            }
+        });
+
+        input.addEventListener("blur", function() {
+            input.value = sanitizeAlpha(input.value).trim();
+            error.classList.remove("show");
+        });
+    });
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const upiId = document.getElementById("upi-id");
+    const upiName = document.getElementById("upi-name");
+    const upiAmount = document.getElementById("upi-amount");
+    const upiNote = document.getElementById("upi-note");
+    const openBtn = document.getElementById("upi-open-btn");
+    const qrBtn = document.getElementById("upi-generate-qr-btn");
+    const status = document.getElementById("upi-status");
+    const qrWrap = document.getElementById("upi-qr-wrap");
+    const qrImg = document.getElementById("upi-qr-img");
+
+    if (!upiId || !upiName || !upiAmount || !openBtn || !qrBtn || !status || !qrWrap || !qrImg) return;
+
+    function buildUpiUri() {
+        const pa = (upiId.value || "").trim();
+        const pn = (upiName.value || "").trim();
+        const am = Number(upiAmount.value || 0);
+        const tn = (upiNote ? upiNote.value : "").trim();
+
+        const upiRegex = /^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9._-]{1,64}$/;
+        if (!upiRegex.test(pa)) {
+            status.textContent = "UPI: enter a valid UPI ID (example: name@oksbi)";
+            return null;
+        }
+        if (!pn) {
+            status.textContent = "UPI: payee name is required";
+            return null;
+        }
+        if (!(am > 0)) {
+            status.textContent = "UPI: enter amount greater than 0";
+            return null;
+        }
+
+        const params = new URLSearchParams({
+            pa: pa.toLowerCase(),
+            pn: pn,
+            am: am.toFixed(2),
+            cu: "INR",
+        });
+        if (tn) params.append("tn", tn);
+        return "upi://pay?" + params.toString();
+    }
+
+    openBtn.addEventListener("click", function() {
+        const uri = buildUpiUri();
+        if (!uri) return;
+        status.textContent = "UPI: opening app...";
+        window.location.assign(uri);
+    });
+
+    qrBtn.addEventListener("click", function() {
+        const uri = buildUpiUri();
+        if (!uri) return;
+        const qrSource = "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" + encodeURIComponent(uri);
+        qrImg.src = qrSource;
+        qrWrap.classList.remove("hidden-btn");
+        status.textContent = "UPI: QR generated. Scan with any UPI app.";
+    });
 });
 </script>
 

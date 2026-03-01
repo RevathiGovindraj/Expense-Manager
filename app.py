@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, session, flash, send_from_directory
+from flask import Flask, render_template, request, redirect, session, flash, send_from_directory, make_response
 from modules.ai_engine import detect_category
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -8,6 +8,8 @@ import sqlite3
 import os
 import re
 import secrets
+import csv
+import io
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -17,7 +19,11 @@ from expense_predictor import predict_next_month_expense
 from modules.ai_engine import train_model
 
 app = Flask(__name__)
-app.secret_key = "secret123"
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
 
 DATABASE = "database.db"
 PROFILE_UPLOAD_DIR = os.path.join("uploads", "profile")
@@ -27,6 +33,15 @@ SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() != "0"
+
+
+@app.after_request
+def apply_security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def parse_expense_message(message):
@@ -303,16 +318,23 @@ def clear_password_otp_session():
     session.pop("pwd_reset_expires_at", None)
 
 
+def is_alpha_space_text(value):
+    if not value:
+        return False
+    normalized = re.sub(r"\s+", " ", value).strip()
+    return bool(re.fullmatch(r"[A-Za-z]+(?: [A-Za-z]+)*", normalized))
+
+
 def send_otp_email(recipient_email, otp_code):
     if not SMTP_HOST or not SMTP_PORT or not SMTP_USER or not SMTP_PASS or not SMTP_FROM:
         return False, "SMTP not configured"
 
     msg = EmailMessage()
-    msg["Subject"] = "FinTrack Pro Password Reset OTP"
+    msg["Subject"] = "SplitPilot Password Reset OTP"
     msg["From"] = SMTP_FROM
     msg["To"] = recipient_email
     msg.set_content(
-        f"Your FinTrack Pro OTP is: {otp_code}\n\n"
+        f"Your SplitPilot OTP is: {otp_code}\n\n"
         "This OTP expires in 10 minutes.\n"
         "If you did not request this, ignore this email."
     )
@@ -807,11 +829,15 @@ def add():
     if "user_id" not in session:
         return redirect("/login")
 
-    description = request.form.get("name")
+    description = (request.form.get("name") or "").strip()
     manual_category = request.form.get("manual_category")
     amount = request.form.get("amount")
 
     if not description or not amount:
+        return redirect("/dashboard")
+
+    if not is_alpha_space_text(description):
+        flash("Expense name must contain only alphabets and spaces.", "error")
         return redirect("/dashboard")
 
     try:
@@ -865,8 +891,12 @@ def edit_expense(id):
     if "user_id" not in session:
         return redirect("/login")
 
-    description = request.form.get("edit_name")
+    description = (request.form.get("edit_name") or "").strip()
     amount = request.form.get("edit_amount")
+
+    if not is_alpha_space_text(description):
+        flash("Expense name must contain only alphabets and spaces.", "error")
+        return redirect("/dashboard")
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1023,6 +1053,10 @@ def add_personal_transaction():
     if not person_name or not description or not amount:
         return redirect("/dashboard")
 
+    if not is_alpha_space_text(person_name):
+        flash("Person name must contain only alphabets and spaces.", "error")
+        return redirect("/dashboard")
+
     if status not in {"Send", "Received"}:
         status = "Send"
 
@@ -1094,6 +1128,74 @@ def delete_personal_transaction(id):
     return redirect("/dashboard")
 
 
+@app.route("/export_expenses_csv")
+def export_expenses_csv():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT description, category, amount, status, expense_date
+        FROM expenses
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (session["user_id"],))
+    rows = cursor.fetchall()
+    conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Description", "Category", "Amount", "Status", "Date"])
+    for row in rows:
+        writer.writerow([
+            row["description"],
+            row["category"],
+            float(row["amount"]),
+            row["status"],
+            row["expense_date"],
+        ])
+
+    response = make_response(output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=expenses_history.csv"
+    return response
+
+
+@app.route("/export_personal_csv")
+def export_personal_csv():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT person_name, description, amount, status, transaction_date
+        FROM personal_transactions
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (session["user_id"],))
+    rows = cursor.fetchall()
+    conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Person", "Description", "Amount", "Status", "Date"])
+    for row in rows:
+        writer.writerow([
+            row["person_name"],
+            row["description"],
+            float(row["amount"]),
+            row["status"],
+            row["transaction_date"],
+        ])
+
+    response = make_response(output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=personal_transactions.csv"
+    return response
+
+
 @app.route("/add_recurring_expense", methods=["POST"])
 def add_recurring_expense():
     if "user_id" not in session:
@@ -1108,6 +1210,10 @@ def add_recurring_expense():
     notes = request.form.get("notes", "").strip()
 
     if not title or not amount or not start_date_raw:
+        return redirect("/dashboard")
+
+    if not is_alpha_space_text(title):
+        flash("Recurring expense title must contain only alphabets and spaces.", "error")
         return redirect("/dashboard")
 
     if frequency not in {"weekly", "monthly", "yearly"}:
@@ -1470,4 +1576,7 @@ def delete_recurring_expense(id):
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    host = os.getenv("FLASK_HOST", "127.0.0.1")
+    port = int(os.getenv("FLASK_PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

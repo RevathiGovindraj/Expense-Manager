@@ -461,6 +461,33 @@ body.dark-mode .auth-card {
     cursor: not-allowed;
 }
 
+.inline-input-error {
+    margin-top: -6px;
+    font-size: 12px;
+    color: #dc2626;
+    display: none;
+}
+
+.inline-input-error.show {
+    display: block;
+}
+
+.upi-qr-wrap {
+    margin-top: 8px;
+    padding: 12px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    background: var(--surface-soft);
+    width: fit-content;
+}
+
+.upi-qr-wrap img {
+    display: block;
+    width: 220px;
+    height: 220px;
+    border-radius: 8px;
+}
+
 .profile-top {
     display: flex;
     gap: 14px;
@@ -508,6 +535,64 @@ body.dark-mode .auth-card {
 
 .hidden-btn {
     display: none !important;
+}
+
+.mini-action-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+    text-decoration: none;
+    color: var(--primary);
+}
+
+.table-search-input {
+    margin: 10px 0 12px;
+}
+
+.danger-btn {
+    background: linear-gradient(120deg, #dc2626, #ef4444);
+}
+
+.confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1800;
+    display: grid;
+    place-items: center;
+}
+
+.confirm-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.45);
+}
+
+.confirm-modal-card {
+    position: relative;
+    width: min(92vw, 420px);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--surface-2);
+    box-shadow: var(--shadow);
+    padding: 16px;
+    z-index: 1;
+}
+
+.confirm-modal-card h4 {
+    margin: 0 0 8px;
+}
+
+.confirm-modal-actions {
+    margin-top: 12px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 table {
