@@ -8,22 +8,30 @@
 </head>
 <body class="auth-page">
   <div class="center-screen">
-    <div class="login-shell">
-      <div class="login-visual">
+    <div class="login-shell login-shell-minimal">
+      <div class="login-visual login-visual-minimal">
         <div class="auth-brand-chip">SplitPilot</div>
         <h2>Welcome Back</h2>
-        <p>Continue tracking your daily spending, sent payments, and received amounts with clarity.</p>
-        <ul>
-          <li>Live dashboard KPIs</li>
-          <li>One-to-one transaction history</li>
-          <li>Receipt and payment screenshot OCR</li>
-        </ul>
+        <p>Professional personal finance workspace for expenses, transfers, and smart tracking.</p>
+        <div class="login-pill-row">
+          <span>Private</span>
+          <span>Fast</span>
+          <span>AI-assisted</span>
+        </div>
       </div>
 
-      <div class="auth-card login-card-enhanced">
+      <div class="auth-card login-card-enhanced login-card-minimal">
         <p class="auth-kicker">Secure Access</p>
         <h2 class="auth-title">Login</h2>
         <p class="auth-subtitle">Access your expense workspace</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash-msg {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
 
         {% if error %}
           <div class="error-box">{{ error }}</div>

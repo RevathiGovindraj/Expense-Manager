@@ -960,6 +960,51 @@ body.dark-mode .login-shell {
     backdrop-filter: blur(10px);
 }
 
+.login-shell-minimal {
+    max-width: 860px;
+}
+
+.login-visual-minimal {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 38px 34px;
+}
+
+.login-visual-minimal h2 {
+    margin: 0;
+    font-size: 42px;
+    line-height: 1.1;
+}
+
+.login-visual-minimal p {
+    margin: 0;
+    max-width: 440px;
+    color: var(--muted);
+}
+
+.login-pill-row {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.login-pill-row span {
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+.login-card-minimal {
+    padding: 30px;
+}
+
 @media (max-width: 900px) {
     .login-shell {
         grid-template-columns: 1fr;
@@ -978,6 +1023,10 @@ body.dark-mode .login-shell {
 
     .login-visual h2 {
         font-size: 30px;
+    }
+
+    .login-visual-minimal h2 {
+        font-size: 34px;
     }
 
     .landing-metrics {

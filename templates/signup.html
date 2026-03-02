@@ -18,23 +18,52 @@
       <div class="auth-card login-card-enhanced">
         <p class="auth-kicker">Get Started</p>
         <h2 class="auth-title">Sign Up</h2>
-        <p class="auth-subtitle">Start tracking your expenses</p>
+        <p class="auth-subtitle">Verify with OTP, then set your password</p>
 
-        <form method="POST" action="/signup" class="stack">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash-msg {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        {% if not otp_pending %}
+          <form method="POST" action="/signup" class="stack">
+            <div class="field-block">
+              <label>Name</label>
+              <input name="name" placeholder="Your name" required>
+            </div>
+            <div class="field-block">
+              <label>Email</label>
+              <input name="email" type="email" placeholder="you@example.com" required>
+            </div>
+            <button type="submit">Send OTP</button>
+          </form>
+        {% else %}
           <div class="field-block">
-            <label>Name</label>
-            <input name="name" placeholder="Your name" required>
+            <label>OTP sent to</label>
+            <input value="{{ pending_email }}" readonly>
           </div>
-          <div class="field-block">
-            <label>Email</label>
-            <input name="email" type="email" placeholder="you@example.com" required>
-          </div>
-          <div class="field-block">
-            <label>Password</label>
-            <input name="password" type="password" placeholder="Create password" required>
-          </div>
-          <button type="submit">Create Account</button>
-        </form>
+          <form method="POST" action="/verify_signup_otp" class="stack">
+            <div class="field-block">
+              <label>OTP</label>
+              <input name="otp" placeholder="Enter 6-digit OTP" minlength="6" maxlength="6" required>
+            </div>
+            <div class="field-block">
+              <label>Set Password</label>
+              <input name="password" type="password" placeholder="Create password" required>
+            </div>
+            <div class="field-block">
+              <label>Confirm Password</label>
+              <input name="confirm_password" type="password" placeholder="Confirm password" required>
+            </div>
+            <button type="submit">Verify OTP & Create Account</button>
+          </form>
+          <form method="POST" action="/cancel_signup_otp" style="margin-top:10px;">
+            <button type="submit" class="ghost-btn">Cancel OTP Request</button>
+          </form>
+        {% endif %}
 
         <p class="muted" style="margin-top:14px;">Already have an account? <a href="/login">Login</a></p>
       </div>

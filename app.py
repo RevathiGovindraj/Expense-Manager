@@ -318,6 +318,13 @@ def clear_password_otp_session():
     session.pop("pwd_reset_expires_at", None)
 
 
+def clear_signup_otp_session():
+    session.pop("signup_name", None)
+    session.pop("signup_email", None)
+    session.pop("signup_otp_hash", None)
+    session.pop("signup_otp_expires_at", None)
+
+
 def is_alpha_space_text(value):
     if not value:
         return False
@@ -522,27 +529,116 @@ def login():
 # ---------------------------
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
+    otp_pending = False
+    pending_email = session.get("signup_email", "")
+    expiry_raw = session.get("signup_otp_expires_at")
+    if session.get("signup_otp_hash") and pending_email and expiry_raw:
+        try:
+            otp_pending = datetime.fromisoformat(expiry_raw) > datetime.now()
+        except Exception:
+            clear_signup_otp_session()
+            otp_pending = False
+
     if request.method == "POST":
-        name = request.form["name"]
-        email = request.form["email"]
-        password = generate_password_hash(request.form["password"])
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        if not name or not email:
+            flash("Name and email are required.", "error")
+            return redirect("/signup")
 
         conn = get_db()
         cursor = conn.cursor()
-
-        try:
-            cursor.execute("""
-                INSERT INTO users (name, email, password)
-                VALUES (?, ?, ?)
-            """, (name, email, password))
-            conn.commit()
-        except:
-            return "Email already exists"
-
+        cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+        exists = cursor.fetchone()
         conn.close()
-        return redirect("/login")
+        if exists:
+            flash("Email already exists. Please login.", "error")
+            return redirect("/login")
 
-    return render_template("signup.html")
+        otp = f"{secrets.randbelow(900000) + 100000}"
+        session["signup_name"] = name
+        session["signup_email"] = email
+        session["signup_otp_hash"] = generate_password_hash(otp)
+        session["signup_otp_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
+
+        sent, reason = send_otp_email(email, otp)
+        if sent:
+            flash(f"OTP sent to {mask_email(email)}. Verify to set password.", "success")
+        else:
+            flash(f"Email OTP could not be sent ({reason}). Demo OTP: {otp}", "error")
+        return redirect("/signup")
+
+    return render_template("signup.html", otp_pending=otp_pending, pending_email=pending_email)
+
+
+@app.route("/verify_signup_otp", methods=["POST"])
+def verify_signup_otp():
+    otp = request.form.get("otp", "").strip()
+    password = request.form.get("password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    name = session.get("signup_name", "")
+    email = session.get("signup_email", "")
+    otp_hash = session.get("signup_otp_hash")
+    expiry_raw = session.get("signup_otp_expires_at")
+
+    if not name or not email or not otp_hash or not expiry_raw:
+        flash("No active signup OTP. Please start signup again.", "error")
+        return redirect("/signup")
+
+    if not otp or not password or not confirm_password:
+        flash("OTP and password fields are required.", "error")
+        return redirect("/signup")
+
+    if password != confirm_password:
+        flash("Password and confirm password do not match.", "error")
+        return redirect("/signup")
+
+    if len(password) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect("/signup")
+
+    try:
+        expiry = datetime.fromisoformat(expiry_raw)
+    except Exception:
+        clear_signup_otp_session()
+        flash("OTP session invalid. Please signup again.", "error")
+        return redirect("/signup")
+
+    if datetime.now() > expiry:
+        clear_signup_otp_session()
+        flash("OTP expired. Please signup again.", "error")
+        return redirect("/signup")
+
+    if not check_password_hash(otp_hash, otp):
+        flash("Invalid OTP. Please try again.", "error")
+        return redirect("/signup")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO users (name, email, password)
+            VALUES (?, ?, ?)
+        """, (name, email, generate_password_hash(password)))
+        conn.commit()
+    except Exception:
+        conn.close()
+        clear_signup_otp_session()
+        flash("Could not create account. Email may already be in use.", "error")
+        return redirect("/signup")
+
+    conn.close()
+    clear_signup_otp_session()
+    flash("Account created successfully. Please login.", "success")
+    return redirect("/login")
+
+
+@app.route("/cancel_signup_otp", methods=["POST"])
+def cancel_signup_otp():
+    clear_signup_otp_session()
+    flash("Signup OTP request cancelled.", "success")
+    return redirect("/signup")
 
 
 # ---------------------------
