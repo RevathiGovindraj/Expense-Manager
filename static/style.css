@@ -472,22 +472,6 @@ body.dark-mode .auth-card {
     display: block;
 }
 
-.upi-qr-wrap {
-    margin-top: 8px;
-    padding: 12px;
-    border: 1px dashed var(--line);
-    border-radius: 12px;
-    background: var(--surface-soft);
-    width: fit-content;
-}
-
-.upi-qr-wrap img {
-    display: block;
-    width: 220px;
-    height: 220px;
-    border-radius: 8px;
-}
-
 .profile-top {
     display: flex;
     gap: 14px;

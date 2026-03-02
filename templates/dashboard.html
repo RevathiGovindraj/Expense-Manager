@@ -26,9 +26,6 @@
             <button class="nav-btn" onclick="openTab(event, 'personal-transactions')">
                 <i class="fas fa-user-group"></i><span>P2P Transfers</span>
             </button>
-            <button class="nav-btn" onclick="openTab(event, 'payments')">
-                <i class="fas fa-indian-rupee-sign"></i><span>Pay</span>
-            </button>
             <button class="nav-btn" onclick="openTab(event, 'recurring-expenses')">
                 <i class="fas fa-rotate"></i><span>Recurring</span>
             </button>
@@ -340,32 +337,6 @@
                     {% else %}
                     <p class="muted">No personal transactions added yet.</p>
                     {% endif %}
-                </div>
-            </div>
-
-            <div id="payments" class="tab-content">
-                <div class="form-card">
-                    <h3 style="margin-top:0;">Pay via UPI (Free)</h3>
-                    <div class="stack">
-                        <input type="text" id="upi-id" placeholder="UPI ID (e.g. name@oksbi)">
-                        <input type="text" id="upi-name" class="alpha-only" placeholder="Payee Name (alphabets only)">
-                        <input type="number" id="upi-amount" step="0.01" placeholder="Amount">
-                        <input type="text" id="upi-note" placeholder="Note (optional)">
-                        <div class="voice-upload-row">
-                            <button type="button" id="upi-open-btn">
-                                <i class="fas fa-mobile-screen-button"></i>
-                                Open UPI App
-                            </button>
-                            <button type="button" id="upi-generate-qr-btn">
-                                <i class="fas fa-qrcode"></i>
-                                Generate QR
-                            </button>
-                        </div>
-                        <p id="upi-status" class="voice-status">UPI: enter details and open app (mobile) or generate QR.</p>
-                        <div id="upi-qr-wrap" class="upi-qr-wrap hidden-btn">
-                            <img id="upi-qr-img" alt="UPI QR Code">
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -1094,68 +1065,6 @@ document.addEventListener("DOMContentLoaded", function() {
             input.value = sanitizeAlpha(input.value).trim();
             error.classList.remove("show");
         });
-    });
-});
-</script>
-
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-    const upiId = document.getElementById("upi-id");
-    const upiName = document.getElementById("upi-name");
-    const upiAmount = document.getElementById("upi-amount");
-    const upiNote = document.getElementById("upi-note");
-    const openBtn = document.getElementById("upi-open-btn");
-    const qrBtn = document.getElementById("upi-generate-qr-btn");
-    const status = document.getElementById("upi-status");
-    const qrWrap = document.getElementById("upi-qr-wrap");
-    const qrImg = document.getElementById("upi-qr-img");
-
-    if (!upiId || !upiName || !upiAmount || !openBtn || !qrBtn || !status || !qrWrap || !qrImg) return;
-
-    function buildUpiUri() {
-        const pa = (upiId.value || "").trim();
-        const pn = (upiName.value || "").trim();
-        const am = Number(upiAmount.value || 0);
-        const tn = (upiNote ? upiNote.value : "").trim();
-
-        const upiRegex = /^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9._-]{1,64}$/;
-        if (!upiRegex.test(pa)) {
-            status.textContent = "UPI: enter a valid UPI ID (example: name@oksbi)";
-            return null;
-        }
-        if (!pn) {
-            status.textContent = "UPI: payee name is required";
-            return null;
-        }
-        if (!(am > 0)) {
-            status.textContent = "UPI: enter amount greater than 0";
-            return null;
-        }
-
-        const params = new URLSearchParams({
-            pa: pa.toLowerCase(),
-            pn: pn,
-            am: am.toFixed(2),
-            cu: "INR",
-        });
-        if (tn) params.append("tn", tn);
-        return "upi://pay?" + params.toString();
-    }
-
-    openBtn.addEventListener("click", function() {
-        const uri = buildUpiUri();
-        if (!uri) return;
-        status.textContent = "UPI: opening app...";
-        window.location.assign(uri);
-    });
-
-    qrBtn.addEventListener("click", function() {
-        const uri = buildUpiUri();
-        if (!uri) return;
-        const qrSource = "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" + encodeURIComponent(uri);
-        qrImg.src = qrSource;
-        qrWrap.classList.remove("hidden-btn");
-        status.textContent = "UPI: QR generated. Scan with any UPI app.";
     });
 });
 </script>
