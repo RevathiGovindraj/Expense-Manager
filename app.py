@@ -307,8 +307,8 @@ def mask_email(email):
 
 def clear_password_otp_session():
     session.pop("pwd_reset_otp_hash", None)
-    session.pop("pwd_reset_new_hash", None)
     session.pop("pwd_reset_expires_at", None)
+    session.pop("pwd_reset_verified_until", None)
 
 
 def clear_signup_otp_session():
@@ -661,16 +661,21 @@ def dashboard():
     predicted_expense = predict_next_month_expense(session["user_id"])
 
     otp_pending = False
+    otp_verified = False
     otp_expiry = session.get("pwd_reset_expires_at")
+    verified_until_raw = session.get("pwd_reset_verified_until")
+
     if session.get("pwd_reset_otp_hash") and otp_expiry:
-        expiry_date = parse_iso_date(otp_expiry.split("T")[0])
-        if expiry_date and expiry_date < datetime.now().date():
+        try:
+            otp_pending = datetime.fromisoformat(otp_expiry) > datetime.now()
+        except Exception:
             clear_password_otp_session()
-        else:
-            try:
-                otp_pending = datetime.fromisoformat(otp_expiry) > datetime.now()
-            except Exception:
-                clear_password_otp_session()
+
+    if verified_until_raw:
+        try:
+            otp_verified = datetime.fromisoformat(verified_until_raw) > datetime.now()
+        except Exception:
+            clear_password_otp_session()
 
     conn = get_db()
     cursor = conn.cursor()
@@ -787,6 +792,7 @@ def dashboard():
             total_sent += amount
 
     lifetime_spending = round(total_sent, 2)
+    total_tracked_volume = round(total_sent + total_received, 2)
     total_transactions = len(expenses) + len(personal_transactions)
     active_recurring_count = sum(1 for rec in recurring_expenses if int(rec["is_active"]) == 1)
 
@@ -920,6 +926,7 @@ def dashboard():
         "dashboard.html",
         user_profile=user_profile,
         otp_pending=otp_pending,
+        otp_verified=otp_verified,
         expenses=expenses,
         personal_transactions=personal_transactions,
         recurring_expenses=recurring_expenses,
@@ -933,6 +940,7 @@ def dashboard():
         total_sent=round(total_sent, 2),
         total_received=round(total_received, 2),
         month_total=round(this_month_total, 2),
+        current_month_label=today.strftime("%B %Y"),
         last_month_total=round(last_month_total, 2),
         percent_change=percent_change,
         budget=monthly_budget,
@@ -941,6 +949,7 @@ def dashboard():
         expenses_json=expenses_json,
         personal_json=personal_json,
         lifetime_spending=lifetime_spending,
+        total_tracked_volume=total_tracked_volume,
         total_transactions=total_transactions,
         active_recurring_count=active_recurring_count,
         avg_monthly_spend=avg_monthly_spend,
@@ -1559,21 +1568,6 @@ def request_password_otp():
     if "user_id" not in session:
         return redirect("/login")
 
-    new_password = request.form.get("new_password", "")
-    confirm_password = request.form.get("confirm_password", "")
-
-    if not new_password or not confirm_password:
-        flash("New password and confirm password are required.", "error")
-        return redirect("/dashboard")
-
-    if new_password != confirm_password:
-        flash("New password and confirm password do not match.", "error")
-        return redirect("/dashboard")
-
-    if len(new_password) < 6:
-        flash("New password must be at least 6 characters.", "error")
-        return redirect("/dashboard")
-
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT email FROM users WHERE id = ?", (session["user_id"],))
@@ -1582,8 +1576,8 @@ def request_password_otp():
 
     otp = f"{secrets.randbelow(900000) + 100000}"
     session["pwd_reset_otp_hash"] = generate_password_hash(otp)
-    session["pwd_reset_new_hash"] = generate_password_hash(new_password)
     session["pwd_reset_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
+    session.pop("pwd_reset_verified_until", None)
 
     recipient_email = user["email"] if user else ""
     destination = mask_email(recipient_email)
@@ -1603,10 +1597,9 @@ def verify_password_otp():
 
     otp = request.form.get("otp", "").strip()
     otp_hash = session.get("pwd_reset_otp_hash")
-    new_password_hash = session.get("pwd_reset_new_hash")
     expiry_raw = session.get("pwd_reset_expires_at")
 
-    if not otp_hash or not new_password_hash or not expiry_raw:
+    if not otp_hash or not expiry_raw:
         flash("No active OTP request. Generate OTP first.", "error")
         return redirect("/dashboard")
 
@@ -1626,18 +1619,62 @@ def verify_password_otp():
         flash("Invalid OTP. Please try again.", "error")
         return redirect("/dashboard")
 
+    session["pwd_reset_verified_until"] = (datetime.now() + timedelta(minutes=10)).isoformat()
+    session.pop("pwd_reset_otp_hash", None)
+    session.pop("pwd_reset_expires_at", None)
+    flash("OTP verified. You can now set a new password.", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/set_password_after_otp", methods=["POST"])
+def set_password_after_otp():
+    if "user_id" not in session:
+        return redirect("/login")
+
+    verified_until_raw = session.get("pwd_reset_verified_until")
+    if not verified_until_raw:
+        flash("Verify OTP first to set a new password.", "error")
+        return redirect("/dashboard")
+
+    try:
+        verified_until = datetime.fromisoformat(verified_until_raw)
+    except Exception:
+        clear_password_otp_session()
+        flash("Verification session expired. Generate OTP again.", "error")
+        return redirect("/dashboard")
+
+    if datetime.now() > verified_until:
+        clear_password_otp_session()
+        flash("Verification session expired. Generate OTP again.", "error")
+        return redirect("/dashboard")
+
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    if not new_password or not confirm_password:
+        flash("New password and confirm password are required.", "error")
+        return redirect("/dashboard")
+
+    if new_password != confirm_password:
+        flash("New password and confirm password do not match.", "error")
+        return redirect("/dashboard")
+
+    if len(new_password) < 6:
+        flash("New password must be at least 6 characters.", "error")
+        return redirect("/dashboard")
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE users
         SET password = ?
         WHERE id = ?
-    """, (new_password_hash, session["user_id"]))
+    """, (generate_password_hash(new_password), session["user_id"]))
     conn.commit()
     conn.close()
 
     clear_password_otp_session()
-    flash("Password updated successfully with OTP verification.", "success")
+    flash("Password updated successfully.", "success")
     return redirect("/dashboard")
 
 

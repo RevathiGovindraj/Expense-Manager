@@ -539,6 +539,12 @@ body.dark-mode .auth-card {
     margin: 10px 0 12px;
 }
 
+.record-filter-row {
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    gap: 10px;
+}
+
 .due-date-chip {
     background: rgba(37, 99, 235, 0.12);
     color: var(--primary);

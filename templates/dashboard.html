@@ -476,16 +476,14 @@
                     <hr>
 
                     <div class="stack">
-                        <h4 class="section-subtitle">Forgot Password with OTP Verification</h4>
+                        <h4 class="section-subtitle">Security</h4>
                         <p class="muted" style="margin:0;">
-                            Enter your new password, generate OTP, then verify it to update password securely.
+                            Use forgot password to receive OTP on your email, then set a new password.
                         </p>
                         <form method="POST" action="/request_password_otp" class="stack">
-                            <input type="password" name="new_password" placeholder="New password" required>
-                            <input type="password" name="confirm_password" placeholder="Confirm new password" required>
                             <button type="submit">
                                 <i class="fas fa-key"></i>
-                                Generate OTP
+                                Forgot Password
                             </button>
                         </form>
                         {% if otp_pending %}
@@ -493,9 +491,21 @@
                             <input type="text" name="otp" placeholder="Enter 6-digit OTP" minlength="6" maxlength="6" required>
                             <button type="submit">
                                 <i class="fas fa-shield-halved"></i>
-                                Verify OTP & Update Password
+                                Verify OTP
                             </button>
                         </form>
+                        {% endif %}
+                        {% if otp_verified %}
+                        <form method="POST" action="/set_password_after_otp" class="stack">
+                            <input type="password" name="new_password" placeholder="New password" required>
+                            <input type="password" name="confirm_password" placeholder="Confirm new password" required>
+                            <button type="submit">
+                                <i class="fas fa-lock"></i>
+                                Set New Password
+                            </button>
+                        </form>
+                        {% endif %}
+                        {% if otp_pending or otp_verified %}
                         <form method="POST" action="/cancel_password_otp">
                             <button type="submit" class="ghost-btn">Cancel OTP Request</button>
                         </form>
@@ -508,8 +518,8 @@
                     <table>
                         <tbody>
                             <tr>
-                                <th>Total Lifetime Spending</th>
-                                <td>&#8377; {{ lifetime_spending }}</td>
+                                <th>Total Tracked Volume (All Time)</th>
+                                <td>&#8377; {{ total_tracked_volume }}</td>
                             </tr>
                             <tr>
                                 <th>Total Transactions</th>
@@ -541,7 +551,17 @@
                             Export CSV
                         </a>
                     </div>
-                    <input type="text" id="records-search" class="table-search-input" placeholder="Search description or category...">
+                    <div class="record-filter-row">
+                        <input type="text" id="records-search" class="table-search-input" placeholder="Search description or category...">
+                        <select id="records-month-filter" class="table-search-input">
+                            <option value="all">All Months</option>
+                            <option value="this_month">This Month</option>
+                            <option value="last_month">Last Month</option>
+                            {% for m in months|reverse %}
+                            <option value="{{ m }}">{{ m }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     {% if expenses %}
                     <table>
                         <thead>
@@ -556,7 +576,7 @@
                         </thead>
                         <tbody>
                             {% for expense in expenses %}
-                            <tr class="record-row" data-desc="{{ expense.description|lower }}" data-cat="{{ expense.category|lower }}" data-status="{{ expense.status|lower }}">
+                            <tr class="record-row" data-desc="{{ expense.description|lower }}" data-cat="{{ expense.category|lower }}" data-status="{{ expense.status|lower }}" data-date="{{ expense.expense_date }}">
                                 <td>{{ expense.description }}</td>
                                 <td>{{ expense.category }}</td>
                                 <td>&#8377; {{ expense.amount }}</td>
@@ -799,17 +819,36 @@ document.addEventListener("DOMContentLoaded", function() {
 <script>
 document.addEventListener("DOMContentLoaded", function() {
     const search = document.getElementById("records-search");
+    const monthFilter = document.getElementById("records-month-filter");
     const rows = Array.from(document.querySelectorAll(".record-row"));
     const empty = document.getElementById("records-empty");
-    if (!search || rows.length === 0) return;
+    if (!search || !monthFilter || rows.length === 0) return;
+
+    function monthPass(dateStr, filterValue) {
+        if (filterValue === "all") return true;
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return false;
+        const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const now = new Date();
+        const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonth = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+
+        if (filterValue === "this_month") return ym === thisMonth;
+        if (filterValue === "last_month") return ym === lastMonth;
+        return ym === filterValue;
+    }
 
     function applyRecordSearch() {
         const q = (search.value || "").trim().toLowerCase();
+        const m = monthFilter.value || "all";
         let count = 0;
 
         rows.forEach(function(row) {
             const hay = `${row.dataset.desc || ""} ${row.dataset.cat || ""} ${row.dataset.status || ""}`.toLowerCase();
-            const ok = !q || hay.includes(q);
+            const textOk = !q || hay.includes(q);
+            const monthOk = monthPass(row.dataset.date || "", m);
+            const ok = textOk && monthOk;
             row.style.display = ok ? "" : "none";
             if (ok) count += 1;
         });
@@ -818,6 +857,7 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     search.addEventListener("input", applyRecordSearch);
+    monthFilter.addEventListener("change", applyRecordSearch);
     applyRecordSearch();
 });
 </script>
