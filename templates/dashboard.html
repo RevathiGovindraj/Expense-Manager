@@ -124,7 +124,21 @@
                                 <tr>
                                     <td>{{ r.title }}</td>
                                     <td>&#8377; {{ r.amount }}</td>
-                                    <td>{{ r.next_due_date }}</td>
+                                    <td>
+                                        <button type="button"
+                                                class="due-date-chip"
+                                                data-title="{{ r.title }}"
+                                                data-category="{{ r.category }}"
+                                                data-amount="{{ r.amount }}"
+                                                data-frequency="{{ r.frequency }}"
+                                                data-date="{{ r.next_due_date }}"
+                                                data-reminder-days="{{ r.reminder_days }}"
+                                                data-notes="{{ r.notes }}"
+                                                data-status-key="{{ r.status_key }}"
+                                                data-days-left="{{ r.days_left }}">
+                                            {{ r.next_due_date }}
+                                        </button>
+                                    </td>
                                     <td>
                                         {% if r.status_key == "overdue" %}
                                             <span class="status-tag send">Overdue ({{ r.days_left | abs }}d)</span>
@@ -135,7 +149,7 @@
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <form method="POST" action="/mark_recurring_paid/{{ r.id }}">
+                                        <form method="POST" action="/mark_recurring_paid/{{ r.id }}" class="confirm-mark-paid" data-title="{{ r.title }}" data-due="{{ r.next_due_date }}">
                                             <button type="submit">Mark Paid</button>
                                         </form>
                                     </td>
@@ -398,9 +412,15 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <form method="POST" action="/mark_recurring_paid/{{ rec.id }}" style="display:inline-block;">
-                                        <button type="submit">Mark Paid</button>
-                                    </form>
+                                    {% if rec.is_active == 1 and rec.next_due_date <= today_iso %}
+                                        <form method="POST" action="/mark_recurring_paid/{{ rec.id }}" class="confirm-mark-paid" data-title="{{ rec.title }}" data-due="{{ rec.next_due_date }}" style="display:inline-block;">
+                                            <button type="submit">Mark Paid</button>
+                                        </form>
+                                    {% else %}
+                                        <button type="button" disabled style="display:inline-block; opacity:0.6; cursor:not-allowed;">
+                                            {% if rec.is_active == 1 %}Paid{% else %}Paused{% endif %}
+                                        </button>
+                                    {% endif %}
                                     <form method="POST" action="/toggle_recurring_expense/{{ rec.id }}" style="display:inline-block; margin-left:6px;">
                                         <button type="submit">{{ "Pause" if rec.is_active == 1 else "Resume" }}</button>
                                     </form>
@@ -588,6 +608,26 @@
         <div class="confirm-modal-actions">
             <button type="button" id="confirm-delete-cancel" class="ghost-btn">Cancel</button>
             <button type="button" id="confirm-delete-yes" class="danger-btn">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div id="due-details-modal" class="confirm-modal hidden-btn" role="dialog" aria-modal="true" aria-labelledby="due-details-title">
+    <div class="confirm-modal-backdrop"></div>
+    <div class="confirm-modal-card">
+        <h4 id="due-details-title">EMI Details</h4>
+        <div class="stack" style="gap:6px;">
+            <p><strong>Title:</strong> <span id="due-detail-title">-</span></p>
+            <p><strong>Category:</strong> <span id="due-detail-category">-</span></p>
+            <p><strong>Amount:</strong> <span id="due-detail-amount">-</span></p>
+            <p><strong>Frequency:</strong> <span id="due-detail-frequency">-</span></p>
+            <p><strong>Due Date:</strong> <span id="due-detail-date">-</span></p>
+            <p><strong>Status:</strong> <span id="due-detail-status">-</span></p>
+            <p><strong>Reminder Days:</strong> <span id="due-detail-reminder-days">-</span></p>
+            <p><strong>Notes:</strong> <span id="due-detail-notes">-</span></p>
+        </div>
+        <div class="confirm-modal-actions">
+            <button type="button" id="due-details-close" class="ghost-btn">Close</button>
         </div>
     </div>
 </div>
@@ -814,6 +854,74 @@ document.addEventListener("DOMContentLoaded", function() {
     yesBtn.addEventListener("click", function() {
         if (targetHref) window.location.href = targetHref;
     });
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const forms = Array.from(document.querySelectorAll("form.confirm-mark-paid"));
+    if (!forms.length) return;
+
+    forms.forEach(function(form) {
+        form.addEventListener("submit", function(e) {
+            const title = form.dataset.title || "this recurring expense";
+            const due = form.dataset.due || "";
+            const ok = window.confirm(`Mark "${title}" as paid?${due ? `\nDue date: ${due}` : ""}`);
+            if (!ok) e.preventDefault();
+        });
+    });
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const modal = document.getElementById("due-details-modal");
+    if (!modal) return;
+
+    const chips = Array.from(document.querySelectorAll(".due-date-chip"));
+    const closeBtn = document.getElementById("due-details-close");
+    const backdrop = modal.querySelector(".confirm-modal-backdrop");
+    const title = document.getElementById("due-detail-title");
+    const category = document.getElementById("due-detail-category");
+    const amount = document.getElementById("due-detail-amount");
+    const frequency = document.getElementById("due-detail-frequency");
+    const dueDate = document.getElementById("due-detail-date");
+    const status = document.getElementById("due-detail-status");
+    const reminderDays = document.getElementById("due-detail-reminder-days");
+    const notes = document.getElementById("due-detail-notes");
+
+    if (!chips.length || !closeBtn || !backdrop) return;
+
+    function closeModal() {
+        modal.classList.add("hidden-btn");
+    }
+
+    chips.forEach(function(chip) {
+        chip.addEventListener("click", function() {
+            title.textContent = chip.dataset.title || "-";
+            category.textContent = chip.dataset.category || "-";
+            amount.textContent = `₹ ${chip.dataset.amount || "-"}`;
+            frequency.textContent = chip.dataset.frequency || "-";
+            dueDate.textContent = chip.dataset.date || "-";
+            reminderDays.textContent = chip.dataset.reminderDays || "-";
+            notes.textContent = (chip.dataset.notes || "").trim() || "-";
+
+            const statusKey = (chip.dataset.statusKey || "").toLowerCase();
+            const daysLeft = Number(chip.dataset.daysLeft || 0);
+            if (statusKey === "overdue") {
+                status.textContent = `Overdue by ${Math.abs(daysLeft)} day(s)`;
+            } else if (statusKey === "due_today") {
+                status.textContent = "Due Today";
+            } else {
+                status.textContent = `Due in ${daysLeft} day(s)`;
+            }
+
+            modal.classList.remove("hidden-btn");
+        });
+    });
+
+    closeBtn.addEventListener("click", closeModal);
+    backdrop.addEventListener("click", closeModal);
 });
 </script>
 

@@ -38,7 +38,7 @@ CATEGORY_KEYWORDS = {
     "Shopping": [
         "shopping", "shop", "shirt", "tshirt", "shoe", "slipper", "dress",
         "jeans", "kurti", "bag", "watch", "myntra", "amazon", "flipkart",
-        "clothes", "fashion",
+        "clothes", "fashion", "gift", "gifts", "present",
     ],
 }
 

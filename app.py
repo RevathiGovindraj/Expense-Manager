@@ -144,9 +144,7 @@ def extract_payment_amount(text):
 
     def parse_amount_token(raw):
         token = raw.strip().replace(",", "")
-        # OCR can read zero as letter O in amounts, e.g., "1O".
         token = re.sub(r"(?<=\d)[oO](?=\d|\b)", "0", token)
-        token = re.sub(r"(?<=\d)\.(?=\D*$)", ".", token)
         if not re.fullmatch(r"\d+(?:\.\d{1,2})?", token):
             return None
         try:
@@ -158,55 +156,51 @@ def extract_payment_amount(text):
         return None
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    values = []
+    compact = " ".join(lines)
+    candidates = []
 
-    # Strict rule: amount must appear next to rupee marker (₹ / Rs / INR).
     marker_pattern = re.compile(
-        r"(?:₹|rs\.?|inr)\s*([0-9O]{1,7}(?:,[0-9O]{2,3})*(?:\.[0-9O]{1,2})?)",
+        r"(?:\u20B9|rs\.?|inr)\s*([0-9O]{1,7}(?:,[0-9O]{2,3})*(?:\.[0-9O]{1,2})?)",
         flags=re.IGNORECASE,
     )
-    for raw in marker_pattern.findall(text):
+    for raw in marker_pattern.findall(compact):
         parsed = parse_amount_token(raw)
         if parsed is not None:
-            values.append((10, parsed))
+            candidates.append((12, parsed))
 
-    # OCR may split marker and amount into separate tokens/lines.
-    compact = " ".join([line.strip() for line in text.splitlines() if line.strip()])
-    tokens = compact.split()
-    rupee_tokens = {"₹", "rs", "rs.", "inr"}
-    for idx, token in enumerate(tokens[:-1]):
-        if token.lower() in rupee_tokens:
-            parsed = parse_amount_token(tokens[idx + 1])
-            if parsed is not None:
-                values.append((9, parsed))
+    # Generic number extraction with scoring to avoid transaction IDs.
+    amount_pattern = re.compile(r"(?<!\d)(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{1,6}(?:\.\d{1,2})?)(?!\d)")
+    low_priority = ("upi", "transaction id", "google transaction id", "utr", "ref", "account", "bank", "@")
 
-    # OCR variant: symbol read as non-alphanumeric character, e.g., "°50".
-    symbol_line_pattern = re.compile(r"^[^\w\s]\s*([0-9O]{1,7}(?:\.[0-9O]{1,2})?)$")
     for line in lines:
-        match = symbol_line_pattern.match(line)
-        if not match:
-            continue
-        parsed = parse_amount_token(match.group(1))
-        if parsed is not None:
-            values.append((8, parsed))
+        line_l = line.lower()
+        line_score = 0
+        if "\u20B9" in line or " rs" in f" {line_l}" or "inr" in line_l:
+            line_score += 5
+        if any(word in line_l for word in ("paid", "sent", "received", "from", "to", "completed")):
+            line_score += 1
+        if any(k in line_l for k in low_priority):
+            line_score -= 5
+        if len(line) <= 18:
+            line_score += 2
 
-    # OCR variant in GPay-like screenshots: rupee symbol becomes leading "2", e.g. "210" for "₹10".
-    # Accept only standalone numeric lines to avoid phone/UPI IDs.
-    standalone_number = re.compile(r"^\d{2,7}$")
-    for line in lines:
-        if not standalone_number.match(line):
-            continue
-        # Skip obvious long identifiers.
-        if len(line) >= 5:
-            continue
-        if line.startswith("2") and len(line) >= 3:
-            corrected = parse_amount_token(line[1:])
-            if corrected is not None:
-                values.append((7, corrected))
+        for raw in amount_pattern.findall(line):
+            parsed = parse_amount_token(raw)
+            if parsed is None:
+                continue
+            score = line_score
+            if "," in raw:
+                score += 4
+            if "." in raw:
+                score += 1
+            if raw.isdigit() and len(raw) >= 7:
+                score -= 6
+            candidates.append((score, parsed))
 
-    if values:
-        values.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        return values[0][1]
+    if candidates:
+        # Highest score first; for ties choose larger amount.
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return candidates[0][1]
 
     return 0.0
 
@@ -332,19 +326,15 @@ def is_alpha_space_text(value):
     return bool(re.fullmatch(r"[A-Za-z]+(?: [A-Za-z]+)*", normalized))
 
 
-def send_otp_email(recipient_email, otp_code):
+def send_email_message(recipient_email, subject, body):
     if not SMTP_HOST or not SMTP_PORT or not SMTP_USER or not SMTP_PASS or not SMTP_FROM:
         return False, "SMTP not configured"
 
     msg = EmailMessage()
-    msg["Subject"] = "SplitPilot Password Reset OTP"
+    msg["Subject"] = subject
     msg["From"] = SMTP_FROM
     msg["To"] = recipient_email
-    msg.set_content(
-        f"Your SplitPilot OTP is: {otp_code}\n\n"
-        "This OTP expires in 10 minutes.\n"
-        "If you did not request this, ignore this email."
-    )
+    msg.set_content(body)
 
     try:
         if SMTP_USE_TLS:
@@ -364,11 +354,54 @@ def send_otp_email(recipient_email, otp_code):
     return True, ""
 
 
+def send_otp_email(recipient_email, otp_code):
+    body = (
+        f"Your SplitPilot OTP is: {otp_code}\n\n"
+        "This OTP expires in 10 minutes.\n"
+        "If you did not request this, ignore this email."
+    )
+    return send_email_message(recipient_email, "SplitPilot Password Reset OTP", body)
+
+
+def send_recurring_reminder_email(recipient_email, recurring_item, status_key, days_left):
+    title = recurring_item["title"]
+    amount = float(recurring_item["amount"])
+    next_due = recurring_item["next_due_date"]
+    frequency = str(recurring_item["frequency"]).title()
+
+    if status_key == "overdue":
+        status_line = f"This payment is overdue by {abs(days_left)} day(s)."
+    elif status_key == "due_today":
+        status_line = "This payment is due today."
+    else:
+        status_line = f"This payment is due in {days_left} day(s)."
+
+    notes = (recurring_item["notes"] or "").strip()
+    notes_line = f"\nNotes: {notes}" if notes else ""
+
+    subject = f"SplitPilot Reminder: {title} due on {next_due}"
+    body = (
+        f"Hello,\n\n"
+        f"Recurring expense reminder from SplitPilot:\n"
+        f"Title: {title}\n"
+        f"Category: {recurring_item['category']}\n"
+        f"Amount: INR {amount:.2f}\n"
+        f"Frequency: {frequency}\n"
+        f"Next Due Date: {next_due}\n"
+        f"{status_line}{notes_line}\n\n"
+        f"Please open SplitPilot and mark it paid when completed."
+    )
+
+    return send_email_message(recipient_email, subject, body)
+
+
 def ensure_recurring_last_paid_column(cursor):
     cursor.execute("PRAGMA table_info(recurring_expenses)")
     recurring_columns = [row[1] for row in cursor.fetchall()]
     if "last_paid_date" not in recurring_columns:
         cursor.execute("ALTER TABLE recurring_expenses ADD COLUMN last_paid_date DATE")
+    if "reminder_last_due_date" not in recurring_columns:
+        cursor.execute("ALTER TABLE recurring_expenses ADD COLUMN reminder_last_due_date DATE")
 
 
 # ---------------------------
@@ -436,6 +469,7 @@ def init_db():
         start_date DATE NOT NULL,
         next_due_date DATE NOT NULL,
         last_paid_date DATE,
+        reminder_last_due_date DATE,
         reminder_days INTEGER NOT NULL DEFAULT 3,
         is_active INTEGER NOT NULL DEFAULT 1,
         notes TEXT DEFAULT '',
@@ -688,7 +722,7 @@ def dashboard():
 
     cursor.execute("""
         SELECT id, title, category, amount, frequency, start_date, next_due_date, last_paid_date,
-               reminder_days, is_active, notes
+               reminder_days, is_active, notes, reminder_last_due_date
         FROM recurring_expenses
         WHERE user_id = ?
         ORDER BY next_due_date ASC
@@ -833,6 +867,8 @@ def dashboard():
     ]
 
     recurring_alerts = []
+    reminder_updates = []
+    user_email = user_profile["email"] if user_profile and user_profile["email"] else ""
     for rec in recurring_expenses:
         if int(rec["is_active"]) != 1:
             continue
@@ -841,14 +877,35 @@ def dashboard():
             continue
         status_key, days_left = reminder_meta(next_due, int(rec["reminder_days"]))
         if status_key in {"overdue", "due_today", "upcoming"}:
+            reminder_due_key = str(rec["next_due_date"])
+            already_sent_for_due = (rec["reminder_last_due_date"] == reminder_due_key)
+            if user_email and not already_sent_for_due:
+                sent, _ = send_recurring_reminder_email(user_email, rec, status_key, days_left)
+                if sent:
+                    reminder_updates.append((reminder_due_key, rec["id"], session["user_id"]))
             recurring_alerts.append({
                 "id": rec["id"],
                 "title": rec["title"],
+                "category": rec["category"],
+                "frequency": rec["frequency"],
+                "notes": rec["notes"] or "",
+                "reminder_days": int(rec["reminder_days"]),
                 "amount": float(rec["amount"]),
                 "next_due_date": rec["next_due_date"],
                 "status_key": status_key,
                 "days_left": days_left,
             })
+
+    if reminder_updates:
+        conn2 = get_db()
+        cursor2 = conn2.cursor()
+        cursor2.executemany("""
+            UPDATE recurring_expenses
+            SET reminder_last_due_date = ?
+            WHERE id = ? AND user_id = ?
+        """, reminder_updates)
+        conn2.commit()
+        conn2.close()
 
     insights = []
     if monthly_budget > 0:
@@ -914,6 +971,7 @@ def dashboard():
         avg_monthly_spend=avg_monthly_spend,
         top_category_name=top_category_name,
         top_category_value=round(top_category_value, 2),
+        today_iso=today.isoformat(),
     )
 
 
@@ -930,6 +988,7 @@ def add():
     amount = request.form.get("amount")
 
     if not description or not amount:
+        flash("Please enter expense name and amount.", "error")
         return redirect("/dashboard")
 
     if not is_alpha_space_text(description):
@@ -939,6 +998,7 @@ def add():
     try:
         amount = float(amount)
     except:
+        flash("Please enter a valid amount.", "error")
         return redirect("/dashboard")
 
     if manual_category:
@@ -958,6 +1018,7 @@ def add():
     conn.close()
 
     train_model()
+    flash("Expense added successfully.", "success")
     return redirect("/dashboard")
 
 
@@ -1036,6 +1097,7 @@ def upload_receipt():
     conn.close()
 
     train_model()
+    flash("Receipt processed and expense added.", "success")
     return redirect("/dashboard")
 
 
@@ -1057,10 +1119,12 @@ def chat_add():
     message = request.form.get("message", "").strip().lower()
 
     if not message:
+        flash("Please type or speak a command.", "error")
         return redirect("/dashboard")
 
     amount, description = parse_expense_message(message)
     if amount is None or not description:
+        flash("Could not parse the expense command.", "error")
         return redirect("/dashboard")
     category = detect_category(description)
 
@@ -1079,6 +1143,7 @@ def chat_add():
     from modules.ai_engine import train_model
     train_model()
 
+    flash("Expense added from smart assistant.", "success")
     return redirect("/dashboard")
 
 
@@ -1183,16 +1248,22 @@ def upload_personal_transaction():
 
     file = request.files.get("payment_screenshot")
     if not file or not file.filename:
+        flash("Please choose a payment screenshot.", "error")
         return redirect("/dashboard")
 
     os.makedirs("uploads", exist_ok=True)
-    filepath = os.path.join("uploads", file.filename)
+    safe_name = secure_filename(file.filename) or f"payment_{int(datetime.now().timestamp())}.png"
+    filepath = os.path.join("uploads", safe_name)
     file.save(filepath)
 
-    text = pytesseract.image_to_string(Image.open(filepath))
+    image = Image.open(filepath)
+    text_primary = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
+    text_secondary = pytesseract.image_to_string(image, config="--oem 3 --psm 11")
+    text = f"{text_primary}\n{text_secondary}"
     person_name, description, amount, status = extract_personal_payment_details(text)
 
     if amount <= 0:
+        flash("Could not detect payment amount from screenshot. Try a clearer image.", "error")
         return redirect("/dashboard")
 
     conn = get_db()
@@ -1204,6 +1275,7 @@ def upload_personal_transaction():
     conn.commit()
     conn.close()
 
+    flash(f"Personal transaction added: {person_name} - ₹{amount}", "success")
     return redirect("/dashboard")
 
 
@@ -1363,19 +1435,25 @@ def mark_recurring_paid(id):
         flash("Recurring expense is inactive or not found.", "error")
         return redirect("/dashboard")
 
-    due_date = parse_iso_date(rec["next_due_date"]) or datetime.now().date()
+    today = datetime.now().date()
+    due_date = parse_iso_date(rec["next_due_date"]) or today
+    if due_date > today:
+        conn.close()
+        flash(f"'{rec['title']}' is not due yet. Next due: {due_date.isoformat()}", "error")
+        return redirect("/dashboard")
+
     next_due = advance_due_date(due_date, rec["frequency"])
 
     cursor.execute("""
         INSERT INTO expenses (user_id, description, category, amount, status, expense_date)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (session["user_id"], f"{rec['title']} (Recurring)", rec["category"], float(rec["amount"]), "Send", datetime.now().date().isoformat()))
+    """, (session["user_id"], f"{rec['title']} (Recurring)", rec["category"], float(rec["amount"]), "Send", today.isoformat()))
 
     cursor.execute("""
         UPDATE recurring_expenses
         SET next_due_date = ?, last_paid_date = ?
         WHERE id = ? AND user_id = ?
-    """, (next_due.isoformat(), datetime.now().date().isoformat(), id, session["user_id"]))
+    """, (next_due.isoformat(), today.isoformat(), id, session["user_id"]))
 
     conn.commit()
     conn.close()
@@ -1676,3 +1754,4 @@ if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", "5000"))
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
     app.run(host=host, port=port, debug=debug, use_reloader=False)
+
