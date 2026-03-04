@@ -10,13 +10,18 @@ import re
 import secrets
 import csv
 import io
-import smtplib
-import ssl
-from email.message import EmailMessage
 import pytesseract
 from PIL import Image
 from expense_predictor import predict_next_month_expense
 from modules.ai_engine import train_model
+from emailsender import send_email
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # dotenv is optional; environment variables may still be provided by the shell/host.
+    pass
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
@@ -27,12 +32,6 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
 
 DATABASE = "database.db"
 PROFILE_UPLOAD_DIR = os.path.join("uploads", "profile")
-SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "").strip()
-SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
-SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() != "0"
 
 
 @app.after_request
@@ -327,31 +326,7 @@ def is_alpha_space_text(value):
 
 
 def send_email_message(recipient_email, subject, body):
-    if not SMTP_HOST or not SMTP_PORT or not SMTP_USER or not SMTP_PASS or not SMTP_FROM:
-        return False, "SMTP not configured"
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = recipient_email
-    msg.set_content(body)
-
-    try:
-        if SMTP_USE_TLS:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-                server.ehlo()
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
-                server.login(SMTP_USER, SMTP_PASS)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15, context=ssl.create_default_context()) as server:
-                server.login(SMTP_USER, SMTP_PASS)
-                server.send_message(msg)
-    except Exception as exc:
-        return False, str(exc)
-
-    return True, ""
+    return send_email(recipient_email, subject, body)
 
 
 def send_otp_email(recipient_email, otp_code):
@@ -1754,4 +1729,3 @@ if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", "5000"))
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
     app.run(host=host, port=port, debug=debug, use_reloader=False)
-
