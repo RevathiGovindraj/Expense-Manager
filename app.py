@@ -319,6 +319,8 @@ def mask_email(email):
 
 
 def clear_password_otp_session():
+    session.pop("pwd_reset_user_id", None)
+    session.pop("pwd_reset_email", None)
     session.pop("pwd_reset_otp_hash", None)
     session.pop("pwd_reset_expires_at", None)
     session.pop("pwd_reset_verified_until", None)
@@ -526,6 +528,26 @@ def profile_photo(filename):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
+    otp_pending = False
+    otp_verified = False
+    pending_reset_email = session.get("pwd_reset_email", "")
+
+    otp_expiry = session.get("pwd_reset_expires_at")
+    verified_until_raw = session.get("pwd_reset_verified_until")
+
+    if session.get("pwd_reset_otp_hash") and otp_expiry:
+        try:
+            otp_pending = datetime.fromisoformat(otp_expiry) > datetime.now()
+        except Exception:
+            clear_password_otp_session()
+            otp_pending = False
+
+    if verified_until_raw:
+        try:
+            otp_verified = datetime.fromisoformat(verified_until_raw) > datetime.now()
+        except Exception:
+            clear_password_otp_session()
+            otp_verified = False
 
     if request.method == "POST":
         email = request.form["email"]
@@ -543,7 +565,13 @@ def login():
         else:
             error = "Invalid credentials"
 
-    return render_template("login.html", error=error)
+    return render_template(
+        "login.html",
+        error=error,
+        otp_pending=otp_pending,
+        otp_verified=otp_verified,
+        pending_reset_email=pending_reset_email,
+    )
 
 
 # ---------------------------
@@ -1578,21 +1606,37 @@ def change_password():
 
 @app.route("/request_password_otp", methods=["POST"])
 def request_password_otp():
-    if "user_id" not in session:
-        return redirect("/login")
+    user_id = session.get("user_id")
+    destination_page = "/dashboard" if user_id else "/login"
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT email FROM users WHERE id = ?", (session["user_id"],))
-    user = cursor.fetchone()
+    user = None
+    if user_id:
+        cursor.execute("SELECT id, email FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+    else:
+        reset_email = request.form.get("reset_email", "").strip().lower()
+        if not reset_email:
+            conn.close()
+            flash("Please enter your email to receive OTP.", "error")
+            return redirect(destination_page)
+        cursor.execute("SELECT id, email FROM users WHERE email = ?", (reset_email,))
+        user = cursor.fetchone()
     conn.close()
 
+    if not user:
+        flash("No account found for this email.", "error")
+        return redirect(destination_page)
+
     otp = f"{secrets.randbelow(900000) + 100000}"
+    session["pwd_reset_user_id"] = user["id"]
+    session["pwd_reset_email"] = user["email"]
     session["pwd_reset_otp_hash"] = generate_password_hash(otp)
     session["pwd_reset_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
     session.pop("pwd_reset_verified_until", None)
 
-    recipient_email = user["email"] if user else ""
+    recipient_email = user["email"]
     destination = mask_email(recipient_email)
     sent, reason = send_otp_email(recipient_email, otp)
     if sent:
@@ -1600,13 +1644,13 @@ def request_password_otp():
     else:
         # Dev fallback so flow still works if SMTP is not configured.
         flash(f"Email OTP could not be sent ({reason}). Demo OTP: {otp}", "error")
-    return redirect("/dashboard")
+    return redirect(destination_page)
 
 
 @app.route("/verify_password_otp", methods=["POST"])
 def verify_password_otp():
-    if "user_id" not in session:
-        return redirect("/login")
+    user_id = session.get("user_id")
+    destination_page = "/dashboard" if user_id else "/login"
 
     otp = request.form.get("otp", "").strip()
     otp_hash = session.get("pwd_reset_otp_hash")
@@ -1614,67 +1658,73 @@ def verify_password_otp():
 
     if not otp_hash or not expiry_raw:
         flash("No active OTP request. Generate OTP first.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     try:
         expiry = datetime.fromisoformat(expiry_raw)
     except Exception:
         clear_password_otp_session()
         flash("OTP session invalid. Please generate a new OTP.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     if datetime.now() > expiry:
         clear_password_otp_session()
         flash("OTP expired. Please generate a new OTP.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     if not check_password_hash(otp_hash, otp):
         flash("Invalid OTP. Please try again.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     session["pwd_reset_verified_until"] = (datetime.now() + timedelta(minutes=10)).isoformat()
     session.pop("pwd_reset_otp_hash", None)
     session.pop("pwd_reset_expires_at", None)
     flash("OTP verified. You can now set a new password.", "success")
-    return redirect("/dashboard")
+    return redirect(destination_page)
 
 
 @app.route("/set_password_after_otp", methods=["POST"])
 def set_password_after_otp():
-    if "user_id" not in session:
-        return redirect("/login")
+    user_id = session.get("user_id")
+    destination_page = "/dashboard" if user_id else "/login"
 
     verified_until_raw = session.get("pwd_reset_verified_until")
+    target_user_id = session.get("pwd_reset_user_id") or user_id
     if not verified_until_raw:
         flash("Verify OTP first to set a new password.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     try:
         verified_until = datetime.fromisoformat(verified_until_raw)
     except Exception:
         clear_password_otp_session()
         flash("Verification session expired. Generate OTP again.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     if datetime.now() > verified_until:
         clear_password_otp_session()
         flash("Verification session expired. Generate OTP again.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
+
+    if not target_user_id:
+        clear_password_otp_session()
+        flash("Reset session invalid. Generate OTP again.", "error")
+        return redirect(destination_page)
 
     new_password = request.form.get("new_password", "")
     confirm_password = request.form.get("confirm_password", "")
 
     if not new_password or not confirm_password:
         flash("New password and confirm password are required.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     if new_password != confirm_password:
         flash("New password and confirm password do not match.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     if len(new_password) < 6:
         flash("New password must be at least 6 characters.", "error")
-        return redirect("/dashboard")
+        return redirect(destination_page)
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1682,22 +1732,21 @@ def set_password_after_otp():
         UPDATE users
         SET password = ?
         WHERE id = ?
-    """, (generate_password_hash(new_password), session["user_id"]))
+    """, (generate_password_hash(new_password), target_user_id))
     conn.commit()
     conn.close()
 
     clear_password_otp_session()
     flash("Password updated successfully.", "success")
-    return redirect("/dashboard")
+    return redirect(destination_page)
 
 
 @app.route("/cancel_password_otp", methods=["POST"])
 def cancel_password_otp():
-    if "user_id" not in session:
-        return redirect("/login")
+    destination_page = "/dashboard" if "user_id" in session else "/login"
     clear_password_otp_session()
     flash("OTP request cleared.", "success")
-    return redirect("/dashboard")
+    return redirect(destination_page)
 
 
 @app.route("/upload_profile_photo", methods=["POST"])
