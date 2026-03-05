@@ -48,34 +48,47 @@ def parse_expense_message(message):
     if not message:
         return None, None
 
+    def parse_amount_token(token):
+        token = (token or "").replace(",", "").strip()
+        try:
+            return float(token)
+        except Exception:
+            return None
+
+    amount_pattern = r"(\d[\d,]*(?:\.\d+)?)"
+
     patterns = [
-        r"^add\s+(\d+(?:\.\d+)?)\s+(.+)$",
-        r"^spent\s+(\d+(?:\.\d+)?)\s+on\s+(.+)$",
-        r"^i\s+spent\s+(\d+(?:\.\d+)?)\s+on\s+(.+)$",
-        r"^pay(?:ed)?\s+(\d+(?:\.\d+)?)\s+for\s+(.+)$",
+        rf"^add\s+{amount_pattern}\s+(.+)$",
+        rf"^spent\s+{amount_pattern}\s+on\s+(.+)$",
+        rf"^i\s+spent\s+{amount_pattern}\s+on\s+(.+)$",
+        rf"^pay(?:ed)?\s+{amount_pattern}\s+for\s+(.+)$",
     ]
 
     for pattern in patterns:
         match = re.match(pattern, message)
         if match:
-            amount = float(match.group(1))
+            amount = parse_amount_token(match.group(1))
             description = match.group(2).strip()
             description = re.sub(r"^(on|for)\s+", "", description).strip()
-            if description:
+            description = re.sub(r"^[,.\s]+|[,.\s]+$", "", description).strip()
+            if amount is not None and description:
                 return amount, description
 
     # Fallback: first number is amount, remaining words become description.
-    amount_match = re.search(r"\d+(?:\.\d+)?", message)
+    amount_match = re.search(amount_pattern, message)
     if not amount_match:
         return None, None
 
-    amount = float(amount_match.group())
+    amount = parse_amount_token(amount_match.group())
+    if amount is None:
+        return None, None
     before = message[:amount_match.start()].strip()
     after = message[amount_match.end():].strip()
     description = f"{before} {after}".strip()
 
     # Trim filler words common in voice commands.
     description = re.sub(r"^(add|spent|i spent|pay|paid|on|for)\s+", "", description).strip()
+    description = re.sub(r"^[,.\s]+|[,.\s]+$", "", description).strip()
     if not description:
         return None, None
 
@@ -686,7 +699,7 @@ def dashboard():
         SELECT id, description, category, amount, status, expense_date
         FROM expenses
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY id DESC
     """, (session["user_id"],))
 
     expenses = cursor.fetchall()
@@ -1127,7 +1140,7 @@ def chat_add():
     from modules.ai_engine import train_model
     train_model()
 
-    flash("Expense added from smart assistant.", "success")
+    flash(f"Expense added from smart assistant. Category: {category}", "success")
     return redirect("/dashboard")
 
 

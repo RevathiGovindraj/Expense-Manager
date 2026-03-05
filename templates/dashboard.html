@@ -1219,6 +1219,25 @@ document.addEventListener("DOMContentLoaded", function() {
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
+    const flashMessages = Array.from(document.querySelectorAll(".flash-msg"));
+    if (flashMessages.length) {
+        setTimeout(function() {
+            flashMessages.forEach(function(msg) {
+                msg.style.transition = "opacity 0.35s ease, transform 0.35s ease, margin 0.35s ease";
+                msg.style.opacity = "0";
+                msg.style.transform = "translateY(-4px)";
+                msg.style.margin = "0";
+                setTimeout(function() {
+                    const parent = msg.parentElement;
+                    msg.remove();
+                    if (parent && !parent.querySelector(".flash-msg")) {
+                        parent.remove();
+                    }
+                }, 360);
+            });
+        }, 3000);
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const input = document.getElementById("voice-message-input");
     const micBtn = document.getElementById("voice-mic-btn");
