@@ -8,8 +8,10 @@ import sqlite3
 import os
 import re
 import secrets
+import time
 import csv
 import io
+from collections import defaultdict, deque
 import pytesseract
 from PIL import Image
 from expense_predictor import predict_next_month_expense
@@ -32,6 +34,14 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
 
 DATABASE = "database.db"
 PROFILE_UPLOAD_DIR = os.path.join("uploads", "profile")
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_CATEGORIES = {"Food", "Shopping", "Bills", "Travel", "Others"}
+ALLOWED_STATUS = {"Send", "Received"}
+RATE_LIMIT_STORE = defaultdict(deque)
+MAX_OTP_ATTEMPTS = 5
+LOGIN_LOCK_STORE = {}
+LOGIN_MAX_FAILED_ATTEMPTS = 3
+LOGIN_LOCK_SECONDS = 300
 
 
 @app.after_request
@@ -321,9 +331,11 @@ def mask_email(email):
 def clear_password_otp_session():
     session.pop("pwd_reset_user_id", None)
     session.pop("pwd_reset_email", None)
+    session.pop("pwd_reset_flow", None)
     session.pop("pwd_reset_otp_hash", None)
     session.pop("pwd_reset_expires_at", None)
     session.pop("pwd_reset_verified_until", None)
+    session.pop("pwd_reset_otp_attempts", None)
 
 
 def clear_signup_otp_session():
@@ -331,6 +343,85 @@ def clear_signup_otp_session():
     session.pop("signup_email", None)
     session.pop("signup_otp_hash", None)
     session.pop("signup_otp_expires_at", None)
+    session.pop("signup_otp_attempts", None)
+
+
+def get_csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token():
+    return {"csrf_token": get_csrf_token}
+
+
+def is_rate_limited(key, limit, window_seconds):
+    now = time.time()
+    bucket = RATE_LIMIT_STORE[key]
+    while bucket and now - bucket[0] > window_seconds:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        return True
+    bucket.append(now)
+    return False
+
+
+def client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def format_wait_time(seconds_left):
+    try:
+        seconds_left = int(max(0, seconds_left))
+    except Exception:
+        seconds_left = 0
+    mins = seconds_left // 60
+    secs = seconds_left % 60
+    if mins > 0:
+        return f"{mins}m {secs}s"
+    return f"{secs}s"
+
+
+def clear_login_lock_for_email(email):
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    keys = [k for k in LOGIN_LOCK_STORE.keys() if str(k).startswith(f"{email}|")]
+    for k in keys:
+        LOGIN_LOCK_STORE.pop(k, None)
+
+
+def is_allowed_image_upload(file_obj):
+    if not file_obj or not file_obj.filename:
+        return False
+    ext = os.path.splitext(file_obj.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return False
+    mimetype = (file_obj.mimetype or "").lower()
+    if not mimetype.startswith("image/"):
+        return False
+    return True
+
+
+@app.before_request
+def validate_csrf_for_post():
+    if request.method != "POST":
+        return None
+    session_token = session.get("csrf_token")
+    request_token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+    if not session_token or not request_token or request_token != session_token:
+        if request.path.startswith("/upload_voice_command"):
+            return ("CSRF validation failed", 400)
+        flash("Security check failed. Please retry the action.", "error")
+        return redirect(request.referrer or "/login")
+    return None
 
 
 def is_alpha_space_text(value):
@@ -400,6 +491,7 @@ def ensure_recurring_last_paid_column(cursor):
 def get_db():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -425,9 +517,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         description TEXT NOT NULL,
-        category TEXT NOT NULL,
-        amount REAL NOT NULL,
-        status TEXT DEFAULT 'Send',
+        category TEXT NOT NULL CHECK (category IN ('Food','Shopping','Bills','Travel','Others')),
+        amount REAL NOT NULL CHECK (amount > 0),
+        status TEXT DEFAULT 'Send' CHECK (status IN ('Send','Received')),
         expense_date DATE DEFAULT CURRENT_DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
@@ -440,8 +532,8 @@ def init_db():
         user_id INTEGER NOT NULL,
         person_name TEXT NOT NULL,
         description TEXT NOT NULL,
-        amount REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'Send',
+        amount REAL NOT NULL CHECK (amount > 0),
+        status TEXT NOT NULL DEFAULT 'Send' CHECK (status IN ('Send','Received')),
         transaction_date DATE DEFAULT CURRENT_DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
@@ -453,14 +545,14 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         title TEXT NOT NULL,
-        category TEXT NOT NULL DEFAULT 'Bills',
-        amount REAL NOT NULL,
-        frequency TEXT NOT NULL DEFAULT 'monthly',
+        category TEXT NOT NULL DEFAULT 'Bills' CHECK (category IN ('Food','Shopping','Bills','Travel','Others')),
+        amount REAL NOT NULL CHECK (amount > 0),
+        frequency TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('weekly','monthly','yearly')),
         start_date DATE NOT NULL,
         next_due_date DATE NOT NULL,
         last_paid_date DATE,
         reminder_last_due_date DATE,
-        reminder_days INTEGER NOT NULL DEFAULT 3,
+        reminder_days INTEGER NOT NULL DEFAULT 3 CHECK (reminder_days BETWEEN 0 AND 30),
         is_active INTEGER NOT NULL DEFAULT 1,
         notes TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -471,10 +563,69 @@ def init_db():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS budgets (
         user_id INTEGER PRIMARY KEY,
-        monthly_budget REAL NOT NULL DEFAULT 0,
+        monthly_budget REAL NOT NULL DEFAULT 0 CHECK (monthly_budget >= 0),
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )
+    """)
+
+    # Validation triggers for existing databases where table CHECK constraints may be absent.
+    cursor.executescript("""
+    CREATE TRIGGER IF NOT EXISTS trg_expenses_validate_insert
+    BEFORE INSERT ON expenses
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'expenses.amount must be > 0') END;
+        SELECT CASE WHEN NEW.status NOT IN ('Send','Received') THEN RAISE(ABORT, 'expenses.status invalid') END;
+        SELECT CASE WHEN NEW.category NOT IN ('Food','Shopping','Bills','Travel','Others') THEN RAISE(ABORT, 'expenses.category invalid') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_expenses_validate_update
+    BEFORE UPDATE ON expenses
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'expenses.amount must be > 0') END;
+        SELECT CASE WHEN NEW.status NOT IN ('Send','Received') THEN RAISE(ABORT, 'expenses.status invalid') END;
+        SELECT CASE WHEN NEW.category NOT IN ('Food','Shopping','Bills','Travel','Others') THEN RAISE(ABORT, 'expenses.category invalid') END;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_personal_validate_insert
+    BEFORE INSERT ON personal_transactions
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'personal_transactions.amount must be > 0') END;
+        SELECT CASE WHEN NEW.status NOT IN ('Send','Received') THEN RAISE(ABORT, 'personal_transactions.status invalid') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_personal_validate_update
+    BEFORE UPDATE ON personal_transactions
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'personal_transactions.amount must be > 0') END;
+        SELECT CASE WHEN NEW.status NOT IN ('Send','Received') THEN RAISE(ABORT, 'personal_transactions.status invalid') END;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_recurring_validate_insert
+    BEFORE INSERT ON recurring_expenses
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'recurring_expenses.amount must be > 0') END;
+        SELECT CASE WHEN NEW.frequency NOT IN ('weekly','monthly','yearly') THEN RAISE(ABORT, 'recurring_expenses.frequency invalid') END;
+        SELECT CASE WHEN NEW.category NOT IN ('Food','Shopping','Bills','Travel','Others') THEN RAISE(ABORT, 'recurring_expenses.category invalid') END;
+        SELECT CASE WHEN NEW.reminder_days < 0 OR NEW.reminder_days > 30 THEN RAISE(ABORT, 'recurring_expenses.reminder_days invalid') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_recurring_validate_update
+    BEFORE UPDATE ON recurring_expenses
+    BEGIN
+        SELECT CASE WHEN NEW.amount <= 0 THEN RAISE(ABORT, 'recurring_expenses.amount must be > 0') END;
+        SELECT CASE WHEN NEW.frequency NOT IN ('weekly','monthly','yearly') THEN RAISE(ABORT, 'recurring_expenses.frequency invalid') END;
+        SELECT CASE WHEN NEW.category NOT IN ('Food','Shopping','Bills','Travel','Others') THEN RAISE(ABORT, 'recurring_expenses.category invalid') END;
+        SELECT CASE WHEN NEW.reminder_days < 0 OR NEW.reminder_days > 30 THEN RAISE(ABORT, 'recurring_expenses.reminder_days invalid') END;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_budgets_validate_insert
+    BEFORE INSERT ON budgets
+    BEGIN
+        SELECT CASE WHEN NEW.monthly_budget <= 0 THEN RAISE(ABORT, 'budgets.monthly_budget must be > 0') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_budgets_validate_update
+    BEFORE UPDATE ON budgets
+    BEGIN
+        SELECT CASE WHEN NEW.monthly_budget <= 0 THEN RAISE(ABORT, 'budgets.monthly_budget must be > 0') END;
+    END;
     """)
 
     # Backward-compatible migration for older budgets schemas.
@@ -550,8 +701,38 @@ def login():
             otp_verified = False
 
     if request.method == "POST":
-        email = request.form["email"]
-        password = request.form["password"]
+        email = (request.form.get("email") or "").strip().lower()
+        password = request.form.get("password") or ""
+        ip = client_ip()
+
+        if not email or not password:
+            error = "Email and password are required."
+            return render_template(
+                "login.html",
+                error=error,
+                otp_pending=otp_pending,
+                otp_verified=otp_verified,
+                pending_reset_email=pending_reset_email,
+            )
+
+        if is_rate_limited(f"login:ip:{ip}", 30, 60):
+            error = "Too many login attempts. Try again in a minute."
+            return render_template(
+                "login.html",
+                error=error,
+                otp_pending=otp_pending,
+                otp_verified=otp_verified,
+                pending_reset_email=pending_reset_email,
+            )
+        if is_rate_limited(f"login:email:{email}", 10, 300):
+            error = "Too many attempts for this account. Try again later."
+            return render_template(
+                "login.html",
+                error=error,
+                otp_pending=otp_pending,
+                otp_verified=otp_verified,
+                pending_reset_email=pending_reset_email,
+            )
 
         conn = get_db()
         cursor = conn.cursor()
@@ -559,11 +740,36 @@ def login():
         user = cursor.fetchone()
         conn.close()
 
+        lock_key = f"{email}|{ip}"
+        lock_meta = LOGIN_LOCK_STORE.get(lock_key, {"count": 0, "lock_until": 0})
+        now = time.time()
+
         if user and check_password_hash(user["password"], password):
+            clear_login_lock_for_email(email)
             session["user_id"] = user["id"]
             return redirect("/dashboard")
         else:
-            error = "Invalid credentials"
+            if lock_meta.get("lock_until", 0) > now:
+                wait_text = format_wait_time(lock_meta["lock_until"] - now)
+                error = f"Too many wrong password attempts. Try again in {wait_text} or use Forgot password OTP."
+                return render_template(
+                    "login.html",
+                    error=error,
+                    otp_pending=otp_pending,
+                    otp_verified=otp_verified,
+                    pending_reset_email=pending_reset_email,
+                )
+            fail_count = int(lock_meta.get("count", 0)) + 1
+            lock_until = 0
+            if fail_count >= LOGIN_MAX_FAILED_ATTEMPTS:
+                lock_until = now + LOGIN_LOCK_SECONDS
+                fail_count = 0
+                wait_text = format_wait_time(LOGIN_LOCK_SECONDS)
+                error = f"Too many wrong password attempts. Try again in {wait_text} or use Forgot password OTP."
+            else:
+                remaining = LOGIN_MAX_FAILED_ATTEMPTS - fail_count
+                error = f"Invalid credentials. {remaining} attempt(s) left before temporary lock."
+            LOGIN_LOCK_STORE[lock_key] = {"count": fail_count, "lock_until": lock_until}
 
     return render_template(
         "login.html",
@@ -610,6 +816,7 @@ def signup():
         session["signup_email"] = email
         session["signup_otp_hash"] = generate_password_hash(otp)
         session["signup_otp_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
+        session["signup_otp_attempts"] = 0
 
         sent, reason = send_otp_email(email, otp)
         if sent:
@@ -631,6 +838,7 @@ def verify_signup_otp():
     email = session.get("signup_email", "")
     otp_hash = session.get("signup_otp_hash")
     expiry_raw = session.get("signup_otp_expires_at")
+    otp_attempts = int(session.get("signup_otp_attempts", 0))
 
     if not name or not email or not otp_hash or not expiry_raw:
         flash("No active signup OTP. Please start signup again.", "error")
@@ -661,6 +869,12 @@ def verify_signup_otp():
         return redirect("/signup")
 
     if not check_password_hash(otp_hash, otp):
+        otp_attempts += 1
+        session["signup_otp_attempts"] = otp_attempts
+        if otp_attempts >= MAX_OTP_ATTEMPTS:
+            clear_signup_otp_session()
+            flash("Too many invalid OTP attempts. Please signup again.", "error")
+            return redirect("/signup")
         flash("Invalid OTP. Please try again.", "error")
         return redirect("/signup")
 
@@ -1025,8 +1239,14 @@ def add():
     except:
         flash("Please enter a valid amount.", "error")
         return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
+        return redirect("/dashboard")
 
     if manual_category:
+        if manual_category not in ALLOWED_CATEGORIES:
+            flash("Invalid category selected.", "error")
+            return redirect("/dashboard")
         category = manual_category
     else:
         category = detect_category(description)
@@ -1050,14 +1270,14 @@ def add():
 # ---------------------------
 # DELETE EXPENSE
 # ---------------------------
-@app.route("/delete/<int:id>")
+@app.route("/delete/<int:id>", methods=["POST"])
 def delete_expense(id):
     if "user_id" not in session:
         return redirect("/login")
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id = ?", (id,))
+    cursor.execute("DELETE FROM expenses WHERE id = ? AND user_id = ?", (id, session["user_id"]))
     conn.commit()
     conn.close()
 
@@ -1079,14 +1299,26 @@ def edit_expense(id):
     if not is_alpha_space_text(description):
         flash("Expense name must contain only alphabets and spaces.", "error")
         return redirect("/dashboard")
+    try:
+        amount = float(amount)
+    except Exception:
+        flash("Please enter a valid amount.", "error")
+        return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
+        return redirect("/dashboard")
 
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE expenses
         SET description = ?, amount = ?
-        WHERE id = ?
-    """, (description, amount, id))
+        WHERE id = ? AND user_id = ?
+    """, (description, amount, id, session["user_id"]))
+    if cursor.rowcount == 0:
+        conn.close()
+        flash("Expense not found.", "error")
+        return redirect("/dashboard")
     conn.commit()
     conn.close()
 
@@ -1102,13 +1334,35 @@ def upload_receipt():
     if "user_id" not in session:
         return redirect("/login")
 
-    file = request.files["receipt"]
+    file = request.files.get("receipt")
+    if not file or not file.filename:
+        flash("Please upload a receipt image.", "error")
+        return redirect("/dashboard")
+    if not is_allowed_image_upload(file):
+        flash("Only JPG, PNG, or WEBP receipt images are allowed.", "error")
+        return redirect("/dashboard")
+
+    filename = secure_filename(file.filename)
+    if not filename:
+        flash("Invalid receipt filename.", "error")
+        return redirect("/dashboard")
     os.makedirs("uploads", exist_ok=True)
-    filepath = os.path.join("uploads", file.filename)
+    filepath = os.path.join("uploads", filename)
     file.save(filepath)
 
-    text = pytesseract.image_to_string(Image.open(filepath))
+    try:
+        image = Image.open(filepath)
+        image.verify()
+        image = Image.open(filepath)
+    except Exception:
+        flash("Uploaded receipt is not a valid image.", "error")
+        return redirect("/dashboard")
+
+    text = pytesseract.image_to_string(image)
     amount = extract_receipt_amount(text)
+    if amount <= 0:
+        flash("Could not detect a valid receipt amount.", "error")
+        return redirect("/dashboard")
 
     category = detect_category("receipt")
 
@@ -1150,6 +1404,9 @@ def chat_add():
     amount, description = parse_expense_message(message)
     if amount is None or not description:
         flash("Could not parse the expense command.", "error")
+        return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
         return redirect("/dashboard")
     category = detect_category(description)
 
@@ -1209,6 +1466,9 @@ def upload_voice_command():
     if amount is None or not description:
         flash(f"Voice command not recognized as expense: \"{message}\"", "error")
         return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
+        return redirect("/dashboard")
 
     category = detect_category(description)
 
@@ -1250,6 +1510,9 @@ def add_personal_transaction():
         amount = float(amount)
     except:
         return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
+        return redirect("/dashboard")
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1275,20 +1538,37 @@ def upload_personal_transaction():
     if not file or not file.filename:
         flash("Please choose a payment screenshot.", "error")
         return redirect("/dashboard")
+    if not is_allowed_image_upload(file):
+        flash("Only JPG, PNG, or WEBP payment images are allowed.", "error")
+        return redirect("/dashboard")
 
     os.makedirs("uploads", exist_ok=True)
     safe_name = secure_filename(file.filename) or f"payment_{int(datetime.now().timestamp())}.png"
     filepath = os.path.join("uploads", safe_name)
     file.save(filepath)
 
-    image = Image.open(filepath)
+    try:
+        image = Image.open(filepath)
+        image.verify()
+        image = Image.open(filepath)
+    except Exception:
+        flash("Uploaded payment screenshot is not a valid image.", "error")
+        return redirect("/dashboard")
     text_primary = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
     text_secondary = pytesseract.image_to_string(image, config="--oem 3 --psm 11")
     text = f"{text_primary}\n{text_secondary}"
+    text_l = text.lower()
+    payment_signals = ("upi", "paid", "sent", "received", "transaction", "from", "to", "bank")
+    if not any(sig in text_l for sig in payment_signals):
+        flash("This does not look like a payment screenshot.", "error")
+        return redirect("/dashboard")
     person_name, description, amount, status = extract_personal_payment_details(text)
 
     if amount <= 0:
         flash("Could not detect payment amount from screenshot. Try a clearer image.", "error")
+        return redirect("/dashboard")
+    if not person_name or person_name == "Unknown":
+        flash("Could not detect sender/receiver details clearly. Try a clearer screenshot.", "error")
         return redirect("/dashboard")
 
     conn = get_db()
@@ -1304,7 +1584,7 @@ def upload_personal_transaction():
     return redirect("/dashboard")
 
 
-@app.route("/delete_personal_transaction/<int:id>")
+@app.route("/delete_personal_transaction/<int:id>", methods=["POST"])
 def delete_personal_transaction(id):
     if "user_id" not in session:
         return redirect("/login")
@@ -1408,6 +1688,9 @@ def add_recurring_expense():
     if not is_alpha_space_text(title):
         flash("Recurring expense title must contain only alphabets and spaces.", "error")
         return redirect("/dashboard")
+    if category not in ALLOWED_CATEGORIES:
+        flash("Invalid recurring category.", "error")
+        return redirect("/dashboard")
 
     if frequency not in {"weekly", "monthly", "yearly"}:
         frequency = "monthly"
@@ -1415,6 +1698,9 @@ def add_recurring_expense():
     try:
         amount = float(amount)
     except Exception:
+        return redirect("/dashboard")
+    if amount <= 0:
+        flash("Amount must be greater than 0.", "error")
         return redirect("/dashboard")
 
     start_date = parse_iso_date(start_date_raw)
@@ -1502,7 +1788,8 @@ def set_budget():
     except Exception:
         return redirect("/dashboard")
 
-    if monthly_budget < 0:
+    if monthly_budget <= 0:
+        flash("Monthly budget must be greater than 0.", "error")
         return redirect("/dashboard")
 
     conn = get_db()
@@ -1606,13 +1893,33 @@ def change_password():
 
 @app.route("/request_password_otp", methods=["POST"])
 def request_password_otp():
+    reset_email_input = (request.form.get("reset_email") or "").strip().lower()
+    login_flow = bool(reset_email_input)
     user_id = session.get("user_id")
-    destination_page = "/dashboard" if user_id else "/login"
+    if login_flow and user_id:
+        session.pop("user_id", None)
+        user_id = None
+    destination_page = "/login" if login_flow else ("/dashboard" if user_id else "/login")
+    ip = client_ip()
+    if is_rate_limited(f"otpreq:ip:{ip}", 8, 300):
+        flash("Too many OTP requests. Try again later.", "error")
+        return redirect(destination_page)
 
     conn = get_db()
     cursor = conn.cursor()
     user = None
-    if user_id:
+    if login_flow:
+        if not reset_email_input:
+            conn.close()
+            flash("Please enter your email to receive OTP.", "error")
+            return redirect(destination_page)
+        cursor.execute("SELECT id, email FROM users WHERE email = ?", (reset_email_input,))
+        user = cursor.fetchone()
+        if reset_email_input and is_rate_limited(f"otpreq:email:{reset_email_input}", 5, 300):
+            conn.close()
+            flash("Too many OTP requests for this email. Try later.", "error")
+            return redirect(destination_page)
+    elif user_id:
         cursor.execute("SELECT id, email FROM users WHERE id = ?", (user_id,))
         user = cursor.fetchone()
     else:
@@ -1623,6 +1930,10 @@ def request_password_otp():
             return redirect(destination_page)
         cursor.execute("SELECT id, email FROM users WHERE email = ?", (reset_email,))
         user = cursor.fetchone()
+        if reset_email and is_rate_limited(f"otpreq:email:{reset_email}", 5, 300):
+            conn.close()
+            flash("Too many OTP requests for this email. Try later.", "error")
+            return redirect(destination_page)
     conn.close()
 
     if not user:
@@ -1632,9 +1943,11 @@ def request_password_otp():
     otp = f"{secrets.randbelow(900000) + 100000}"
     session["pwd_reset_user_id"] = user["id"]
     session["pwd_reset_email"] = user["email"]
+    session["pwd_reset_flow"] = "login" if login_flow else "dashboard"
     session["pwd_reset_otp_hash"] = generate_password_hash(otp)
     session["pwd_reset_expires_at"] = (datetime.now() + timedelta(minutes=10)).isoformat()
     session.pop("pwd_reset_verified_until", None)
+    session["pwd_reset_otp_attempts"] = 0
 
     recipient_email = user["email"]
     destination = mask_email(recipient_email)
@@ -1649,12 +1962,18 @@ def request_password_otp():
 
 @app.route("/verify_password_otp", methods=["POST"])
 def verify_password_otp():
+    flow = session.get("pwd_reset_flow", "dashboard")
     user_id = session.get("user_id")
-    destination_page = "/dashboard" if user_id else "/login"
+    destination_page = "/login" if flow == "login" else ("/dashboard" if user_id else "/login")
+    ip = client_ip()
+    if is_rate_limited(f"otpverify:ip:{ip}", 20, 300):
+        flash("Too many OTP verification attempts. Try again later.", "error")
+        return redirect(destination_page)
 
     otp = request.form.get("otp", "").strip()
     otp_hash = session.get("pwd_reset_otp_hash")
     expiry_raw = session.get("pwd_reset_expires_at")
+    otp_attempts = int(session.get("pwd_reset_otp_attempts", 0))
 
     if not otp_hash or not expiry_raw:
         flash("No active OTP request. Generate OTP first.", "error")
@@ -1673,6 +1992,12 @@ def verify_password_otp():
         return redirect(destination_page)
 
     if not check_password_hash(otp_hash, otp):
+        otp_attempts += 1
+        session["pwd_reset_otp_attempts"] = otp_attempts
+        if otp_attempts >= MAX_OTP_ATTEMPTS:
+            clear_password_otp_session()
+            flash("Too many invalid OTP attempts. Generate OTP again.", "error")
+            return redirect(destination_page)
         flash("Invalid OTP. Please try again.", "error")
         return redirect(destination_page)
 
@@ -1685,8 +2010,9 @@ def verify_password_otp():
 
 @app.route("/set_password_after_otp", methods=["POST"])
 def set_password_after_otp():
+    flow = session.get("pwd_reset_flow", "dashboard")
     user_id = session.get("user_id")
-    destination_page = "/dashboard" if user_id else "/login"
+    destination_page = "/login" if flow == "login" else ("/dashboard" if user_id else "/login")
 
     verified_until_raw = session.get("pwd_reset_verified_until")
     target_user_id = session.get("pwd_reset_user_id") or user_id
@@ -1736,6 +2062,7 @@ def set_password_after_otp():
     conn.commit()
     conn.close()
 
+    clear_login_lock_for_email(session.get("pwd_reset_email", ""))
     clear_password_otp_session()
     flash("Password updated successfully.", "success")
     return redirect(destination_page)
@@ -1743,7 +2070,8 @@ def set_password_after_otp():
 
 @app.route("/cancel_password_otp", methods=["POST"])
 def cancel_password_otp():
-    destination_page = "/dashboard" if "user_id" in session else "/login"
+    flow = session.get("pwd_reset_flow", "dashboard")
+    destination_page = "/login" if flow == "login" else ("/dashboard" if "user_id" in session else "/login")
     clear_password_otp_session()
     flash("OTP request cleared.", "success")
     return redirect(destination_page)
@@ -1806,7 +2134,7 @@ def toggle_recurring_expense(id):
     return redirect("/dashboard")
 
 
-@app.route("/delete_recurring_expense/<int:id>")
+@app.route("/delete_recurring_expense/<int:id>", methods=["POST"])
 def delete_recurring_expense(id):
     if "user_id" not in session:
         return redirect("/login")

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Login - SplitPilot</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -103,6 +104,19 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", function() {
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      const csrfToken = csrfMeta ? csrfMeta.getAttribute("content") : "";
+      if (csrfToken) {
+        document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+          if (form.querySelector('input[name="csrf_token"]')) return;
+          const hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = "csrf_token";
+          hidden.value = csrfToken;
+          form.appendChild(hidden);
+        });
+      }
+
       const toggleLink = document.getElementById("forgot-toggle-link");
       const panel = document.getElementById("forgot-panel");
       if (!toggleLink || !panel) return;

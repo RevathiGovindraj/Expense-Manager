@@ -559,6 +559,20 @@ body.dark-mode .auth-card {
     background: linear-gradient(120deg, #dc2626, #ef4444);
 }
 
+.delete-link-btn {
+    background: transparent;
+    color: var(--danger);
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    font-weight: 500;
+}
+
+.delete-link-btn:hover {
+    text-decoration: underline;
+    filter: none;
+}
+
 .confirm-modal {
     position: fixed;
     inset: 0;

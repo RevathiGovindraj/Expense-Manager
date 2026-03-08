@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Dashboard - SplitPilot</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -342,7 +343,11 @@
                                     </span>
                                 </td>
                                 <td>{{ txn.transaction_date }}</td>
-                                <td><a href="/delete_personal_transaction/{{ txn.id }}" class="confirm-delete" data-item="personal transaction">Delete</a></td>
+                                <td>
+                                    <form method="POST" action="/delete_personal_transaction/{{ txn.id }}" class="confirm-delete-form" data-item="personal transaction" style="display:inline;">
+                                        <button type="submit" class="delete-link-btn">Delete</button>
+                                    </form>
+                                </td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -424,7 +429,9 @@
                                     <form method="POST" action="/toggle_recurring_expense/{{ rec.id }}" style="display:inline-block; margin-left:6px;">
                                         <button type="submit">{{ "Pause" if rec.is_active == 1 else "Resume" }}</button>
                                     </form>
-                                    <a href="/delete_recurring_expense/{{ rec.id }}" class="confirm-delete" data-item="recurring expense" style="margin-left:6px; color:#dc2626;">Delete</a>
+                                    <form method="POST" action="/delete_recurring_expense/{{ rec.id }}" class="confirm-delete-form" data-item="recurring expense" style="display:inline-block; margin-left:6px;">
+                                        <button type="submit" class="delete-link-btn">Delete</button>
+                                    </form>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -586,7 +593,11 @@
                                     </span>
                                 </td>
                                 <td>{{ expense.expense_date }}</td>
-                                <td><a href="/delete/{{ expense.id }}" class="confirm-delete" data-item="expense">Delete</a></td>
+                                <td>
+                                    <form method="POST" action="/delete/{{ expense.id }}" class="confirm-delete-form" data-item="expense" style="display:inline;">
+                                        <button type="submit" class="delete-link-btn">Delete</button>
+                                    </form>
+                                </td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -869,21 +880,21 @@ document.addEventListener("DOMContentLoaded", function() {
     const cancelBtn = document.getElementById("confirm-delete-cancel");
     const yesBtn = document.getElementById("confirm-delete-yes");
     const backdrop = modal ? modal.querySelector(".confirm-modal-backdrop") : null;
-    const links = Array.from(document.querySelectorAll("a.confirm-delete"));
-    if (!modal || !text || !cancelBtn || !yesBtn || !backdrop || links.length === 0) return;
+    const forms = Array.from(document.querySelectorAll("form.confirm-delete-form"));
+    if (!modal || !text || !cancelBtn || !yesBtn || !backdrop || forms.length === 0) return;
 
-    let targetHref = "";
+    let targetForm = null;
 
     function closeModal() {
         modal.classList.add("hidden-btn");
-        targetHref = "";
+        targetForm = null;
     }
 
-    links.forEach(function(link) {
-        link.addEventListener("click", function(e) {
+    forms.forEach(function(form) {
+        form.addEventListener("submit", function(e) {
             e.preventDefault();
-            targetHref = link.getAttribute("href") || "";
-            const item = link.getAttribute("data-item") || "item";
+            targetForm = form;
+            const item = form.getAttribute("data-item") || "item";
             text.textContent = `Are you sure you want to delete this ${item}? This action cannot be undone.`;
             modal.classList.remove("hidden-btn");
         });
@@ -892,7 +903,7 @@ document.addEventListener("DOMContentLoaded", function() {
     cancelBtn.addEventListener("click", closeModal);
     backdrop.addEventListener("click", closeModal);
     yesBtn.addEventListener("click", function() {
-        if (targetHref) window.location.href = targetHref;
+        if (targetForm) targetForm.submit();
     });
 });
 </script>
@@ -994,6 +1005,19 @@ document.addEventListener("DOMContentLoaded", function() {
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
+    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    const csrfToken = csrfMeta ? csrfMeta.getAttribute("content") : "";
+    if (csrfToken) {
+        document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+            if (form.querySelector('input[name="csrf_token"]')) return;
+            const hidden = document.createElement("input");
+            hidden.type = "hidden";
+            hidden.name = "csrf_token";
+            hidden.value = csrfToken;
+            form.appendChild(hidden);
+        });
+    }
+
     const recordBtn = document.getElementById("record-audio-btn");
     const uploadBtn = document.getElementById("upload-audio-btn");
     const status = document.getElementById("voice-upload-status");
@@ -1136,6 +1160,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
         const formData = new FormData();
         formData.append("voice_audio", wavBlob, "voice_command.wav");
+        if (csrfToken) formData.append("csrf_token", csrfToken);
 
         try {
             const response = await fetch("/upload_voice_command", {

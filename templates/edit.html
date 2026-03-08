@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Edit Expense</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -21,4 +22,19 @@
     </div>
   </div>
 </body>
+<script>
+  document.addEventListener("DOMContentLoaded", function() {
+    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    const csrfToken = csrfMeta ? csrfMeta.getAttribute("content") : "";
+    if (!csrfToken) return;
+    document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+      if (form.querySelector('input[name="csrf_token"]')) return;
+      const hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = "csrf_token";
+      hidden.value = csrfToken;
+      form.appendChild(hidden);
+    });
+  });
+</script>
 </html>
